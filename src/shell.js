@@ -4,13 +4,15 @@ import {
     esc, short, clone, clamp, fmtNum, h, dateShort, userName, TITLE, LOG, VERSION, MODULE, sub,
 } from './core.js';
 import { compute, buildInjection, setInjection, commit, addAdjust, gatherSources, loreNames, chatCharacters, unreadCount, dueLetters, inTransit } from './engine.js';
-import { genModule, instructModule } from './ai.js';
+import { genModule, instructModule, genGroup, GEN_GROUPS } from './ai.js';
 import { PROMPT_DEFS, P, setPrompt, countTokens, estTokens, FEATURE_NAMES } from './prompts.js';
 import { popup, confirmPopup, askConfirm, busyBtn, editorHTML, bindEditor, diffHTML, ai1, gauge, seg, applyTheme, THEMES, THEME_KEYS, themeVars, avatar, emptyBox, sec } from './kit.js';
 import { VIEW, VIEW_ACTIONS, VIEW_CHANGES, GROUPS, TAB_MOD, TAB_INFO, manageHTML, miniWidgets, MINI } from './views.js';
 import { DICE_ACTIONS, DICE_CHANGES } from './dice.js';
 import { CONTACT_ACTIONS } from './contact.js';
 import { FEED_ACTIONS } from './feeds.js';
+import { MONEY_ACTIONS } from './money.js';
+import { FATE_ACTIONS } from './fate.js';
 import { EDIT } from './core.js';
 import { translateSheet } from './translate.js';
 
@@ -95,6 +97,7 @@ export function renderPanel(el) {
                 <button class="ss-chip btn diff-${diffOf(meta)}" data-act="tab" data-arg="manage" title="난이도"><i class="fa-solid ${d0.icon}"></i> ${d0.name}</button>
                 <button class="ss-ib ${meta.paused ? 'on' : ''}" data-act="pause" title="${meta.paused ? '재개' : '일시정지 (AI에게 상태를 보내지 않음)'}"><i class="fa-solid ${meta.paused ? 'fa-play' : 'fa-pause'}"></i></button>
                 <button class="ss-ib" data-act="prompts" title="프롬프트 · 토큰"><i class="fa-solid fa-scroll"></i></button>
+                <button class="ss-ib" data-act="fullscreen" title="${!inSide && settings().sheetFull ? '전체화면 끄기' : '전체화면'}"><i class="fa-solid ${!inSide && settings().sheetFull ? 'fa-compress' : 'fa-expand'}"></i></button>
                 ${inSide ? `<button class="ss-ib" data-act="sidemini" title="작게"><i class="fa-solid fa-down-left-and-up-right-to-center"></i></button>` : ''}
             </div>
         </header>
@@ -116,7 +119,7 @@ export function renderPanel(el) {
 }
 app.renderPanel = renderPanel;
 
-const ACTIONS = { ...VIEW_ACTIONS, ...DICE_ACTIONS, ...CONTACT_ACTIONS, ...FEED_ACTIONS };
+const ACTIONS = { ...VIEW_ACTIONS, ...DICE_ACTIONS, ...CONTACT_ACTIONS, ...FEED_ACTIONS, ...MONEY_ACTIONS, ...FATE_ACTIONS };
 const CHANGES = { ...VIEW_CHANGES, ...DICE_CHANGES };
 
 async function onPanelAction(el, act, arg, btn) {
@@ -172,6 +175,14 @@ async function onPanelAction(el, act, arg, btn) {
         case 'themewin': return openThemeWindow();
         case 'trsheet': return translateSheet(btn);
         case 'sidemini': settings().sideState = 'mini'; saveSettings(); return ensureUI();
+        case 'fullscreen': {
+            const dlg = el.closest('dialog');
+            if (!dlg) return openSheet(el._ss?.tab, { full: true }); // 사이드에서 누르면 전체화면 창으로
+            const on = !dlg.classList.contains('ss-full');
+            dlg.classList.toggle('ss-full', on);
+            settings().sheetFull = on; saveSettings();
+            return renderPanel(el);
+        }
         default: { const fn = ACTIONS[act] ?? MANAGE_ACTIONS[act]; if (fn) return fn(el, arg, btn, s); }
     }
 }
@@ -200,13 +211,15 @@ export function rerenderPanels() {
         renderPanel(el);
     }
 }
-export async function openSheet(tab) {
+export async function openSheet(tab, opt = {}) {
     const el = document.createElement('div');
     el.className = 'ss-panel ss-panel-pop';
     el._ss = { tab: tab ?? 'home', mode: 'view', work: null, ui: {} };
+    const full = opt.full ?? settings().sheetFull;
+    if (opt.full) settings().sheetFull = true;
     panels.add(el);
     renderPanel(el);
-    await popup(el, { large: true });
+    await popup(el, { large: true, full });
     panels.delete(el);
 }
 
@@ -442,7 +455,7 @@ export async function openWizard() {
     const curMods = meta?.mods ?? Object.fromEntries(MOD_IDS.map(id => [id, settings().defaultMods ? settings().defaultMods[id] !== false : true]));
     const W = { base: hasSrc ? 'auto' : 'new', pmode: hasSrc ? 'minimal' : 'detailed', diff: meta?.difficulty ?? settings().difficulty, genre: '', cmode: 'auto' };
     const el = h(`<div class="ss-root ss-scope ss-wizard">
-        <div class="ss-wz-head"><i class="fa-solid fa-wand-magic-sparkles"></i><div><b>상태창 만들기</b><small>어떤 카드든, 카드가 없어도 돼요. AI가 칸마다 한 번씩 채워요.</small></div></div>
+        <div class="ss-wz-head"><i class="fa-solid fa-wand-magic-sparkles"></i><div><b>상태창 만들기</b><small>어떤 카드든, 카드가 없어도 돼요. AI가 관련 칸끼리 묶어서 채워요.</small></div></div>
         <div class="ss-card ss-found">
             <div><span>캐릭터</span><b>${chars.length ? chars.map(ch => esc(ch.name)).join(', ') : '없음'}</b></div>
             <div><span>유저</span><b>${esc(c.name1)}${persona ? ' · 페르소나 있음' : ''}</b></div>
@@ -473,7 +486,10 @@ export async function openWizard() {
         <div class="ss-row-btns"><button class="ss-btn pri big ss-w-go"><i class="fa-solid fa-play"></i> 생성 시작</button><small class="ss-hint ss-w-cost"></small></div>
         <div class="ss-w-prog"></div>
     </div>`);
-    const cost = () => { const n = el.querySelectorAll('[data-mod]:checked').length; el.querySelector('.ss-w-cost').textContent = `AI ${n + 1}회 (세계 핵심 1 + 기능 ${n}) · 보통 1~3분`; el.querySelector('.ss-cmode').classList.toggle('ss-hide', !el.querySelector('[data-mod="contact"]').checked); };
+    const cost = () => {
+        const on = [...el.querySelectorAll('[data-mod]:checked')].map(i => i.dataset.mod), n = on.length;
+        const g = settings().genBatch ? GEN_GROUPS.filter(gr => gr.some(id => on.includes(id))).length : n;
+        el.querySelector('.ss-w-cost').textContent = settings().genBatch ? `AI ${g + 1}회 (세계 핵심 1 + 묶음 ${g} · 기능 ${n}개) · 보통 1~2분` : `AI ${n + 1}회 (세계 핵심 1 + 기능 ${n}) · 보통 1~3분`; el.querySelector('.ss-cmode').classList.toggle('ss-hide', !el.querySelector('[data-mod="contact"]').checked); };
     cost();
     el.addEventListener('change', (e) => { const l = e.target.closest('.ss-mod'); if (l) l.classList.toggle('on', e.target.checked); cost(); });
     el.addEventListener('click', (e) => {
@@ -514,6 +530,18 @@ export async function openWizard() {
             return true;
         } catch (e) { console.error(LOG, id, e); setRow(id, name, 'fail', `${esc(e.message)} <button class="ss-btn sm" data-retry="${id}">다시</button>`); return false; }
     };
+    // 묶음 하나: 한 번에 받고, 빠진 칸만 따로 다시 받는다
+    const runGroup = async (grp) => {
+        for (const id of grp) setRow(id, MOD[id].name, 'run', grp.length > 1 ? '묶음 생성 중' : '');
+        let got = {};
+        try { got = await genGroup(grp, { sources: opts.sources, core: results.core, instruction: opts.instruction, profileMode: opts.pmode, contactMode: opts.cmode, feature: 'wizard' }); }
+        catch (e) { console.warn(LOG, 'group', grp, e); }
+        const miss = [];
+        for (const id of grp) {
+            if (got[id]) { results.data[id] = got[id]; setRow(id, MOD[id].name, 'ok'); } else miss.push(id);
+        }
+        for (const id of miss) await runOne(id);
+    };
     prog.addEventListener('click', async (e) => {
         const id = e.target.closest('[data-retry]')?.dataset.retry;
         if (!id || !opts) return;
@@ -552,9 +580,19 @@ export async function openWizard() {
         setRow('core', '세계 핵심', 'wait');
         for (const id of ids) setRow(id, MOD[id].name, 'wait');
         if (await runOne('core')) {
-            const q = [...ids];
-            const worker = async () => { while (q.length) await runOne(q.shift()); };
-            await Promise.all([worker(), worker(), worker()]);
+            const par = clamp(parseInt(settings().genParallel, 10) || 4, 1, 8);
+            if (settings().genBatch) {
+                const groups = GEN_GROUPS.map(g => g.filter(id => ids.includes(id))).filter(g => g.length);
+                const left = ids.filter(id => !GEN_GROUPS.flat().includes(id));
+                if (left.length) groups.push(left);
+                const q = [...groups];
+                const worker = async () => { while (q.length) await runGroup(q.shift()); };
+                await Promise.all(Array.from({ length: Math.min(par, q.length) }, worker));
+            } else {
+                const q = [...ids];
+                const worker = async () => { while (q.length) await runOne(q.shift()); };
+                await Promise.all(Array.from({ length: Math.min(par, q.length) }, worker));
+            }
         }
         busyBtn(btn, false);
         btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 다시 생성';
@@ -618,7 +656,7 @@ export async function openPromptWindow(tab = 'when') {
             const [ti, to] = sum(u.filter(x => new Date(x.t).toDateString() === today));
             const [ai, ao] = sum(u);
             body = `<div class="ss-stats"><div><small>오늘</small><b>${u.filter(x => new Date(x.t).toDateString() === today).length}회</b><span>입력 ≈${fmtNum(ti)} · 출력 ≈${fmtNum(to)}</span></div><div><small>기록 전체 (최근 120)</small><b>${u.length}회</b><span>입력 ≈${fmtNum(ai)} · 출력 ≈${fmtNum(ao)}</span></div></div>
-                <p class="ss-hint">확장 AI 호출만 적어요 (본편 생성은 실리태번이 따로 셉니다). 토큰은 글자 수로 어림한 값이에요.${globalThis[Symbol.for('blue-lemonade.usage')] ? ' 블루레몬에이드 사용량 장부에도 함께 적고 있어요.' : ''}</p>
+                <p class="ss-hint">확장 AI 호출만 적어요 (본편 생성은 실리태번이 따로 셉니다). 토큰은 글자 수로 어림한 값이에요.</p>
                 <div class="ss-usage">${u.map(x => `<div class="${x.ok ? '' : 'fail'}"><small>${new Date(x.t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small><b>${esc(FEATURE_NAMES[x.f] ?? x.f)}</b><span>↑${fmtNum(x.inp)} ↓${fmtNum(x.out)}</span></div>`).join('') || emptyBox('아직 기록이 없어요', 'fa-receipt')}</div>
                 ${u.length ? '<button class="ss-btn sm ghost" data-uclear="1"><i class="fa-solid fa-broom"></i> 기록 지우기</button>' : ''}`;
         }

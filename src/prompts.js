@@ -7,6 +7,8 @@ export const PROMPT_DEFS = [
     // ── 본편 주입 (매 턴) ──
     { key: 'inj.header', group: 'inject', label: '상태 머리말', when: '본편 생성마다 (주입문 맨 앞)', text: '[STATUS SIM — the live game state of this roleplay. It is authoritative: keep the narration consistent with these numbers, places, dates and relationships. The extension tracks the numbers; you only report changes.]' },
     { key: 'inj.output', group: 'inject', label: '<status> 출력 규칙', when: '본편 생성마다 (자동 반영 A·A+B 모드)', text: '[STATUS OUTPUT] END every reply with a <status> block listing ONLY what changed this turn, one "key: value" per line, numbers signed. Nothing changed → <status></status>. No code fences. Values in Korean, names exactly as above.' },
+    { key: 'inj.ultra', group: 'inject', label: '초압축: 머리말·범례', when: '본편 생성마다 (규칙 주입: 초압축)', text: '[SS live game state — authoritative, keep the story consistent] legend: ♥name aff/trust · @here>nearby · Q active quest · ✉message · ※note · ⚠condition · $money' },
+    { key: 'inj.ultra.output', group: 'inject', label: '초압축: <status> 출력 규칙', when: '본편 생성마다 (초압축 · 자동 반영 A·A+B)', text: 'END every reply with <status> listing ONLY what changed, one "key: value" per line (numbers ±N, lists +name/-name, name | detail). Nothing changed → <status></status>. Keys: {keys}' },
     { key: 'inj.example', group: 'inject', label: '<status> 예시', when: '본편 생성마다 (규칙 주입: 전체일 때만)', text: 'Example:\n<status>\nstat: 체력 -8\ncash: -120\nitem: +낡은 열쇠\nloc: 항구 창고\naff: 레온 +3\n</status>' },
     { key: 'inj.dice', group: 'inject', label: '주사위 규칙', when: '본편 생성마다 (주사위 켬)', text: "Dice: when {{user}}'s message contains [판정 · …], that result was rolled by the system — narrate exactly that outcome (대성공/성공/실패/대실패). Don't roll dice yourself. For risky actions whose outcome is uncertain, ask for a roll with the roll key instead of deciding." },
     { key: 'inj.letter', group: 'inject', label: '편지 세계 규칙', when: '본편 생성마다 (연락 = 편지)', text: 'Communication: there are no phones. Letters ({app}) take time to arrive (days, by courier). Do not let distant characters react to a letter before it has arrived. A paid express courier can deliver the same day.' },
@@ -19,7 +21,7 @@ export const PROMPT_DEFS = [
     { key: 'gen.profile', group: 'call', label: '생성: 프로필', when: '상태창 만들기 · 프로필 칸', text: 'Profiles for {{user}} (role user), the main characters (role main) and a few important NPCs (role npc, at most 4). MODE minimal: summary + at most 4 short fields, because the card/lorebook already has details. MODE detailed: 8-12 rich fields each (나이, 외모, 성격, 말투, 배경, 능력, 좋아하는 것, 싫어하는 것, 비밀 …) so this sheet alone can carry the character.' },
     { key: 'gen.stats', group: 'call', label: '생성: 수치', when: '상태창 만들기 · 수치 칸', text: '2-4 gauges fitting the genre (always a health-like one; e.g. 마나/기력/정신력/배고픔), 4-6 attributes used as dice modifiers (-2~+5) fitting {{user}}, and current conditions if any (may be empty).' },
     { key: 'gen.dice', group: 'call', label: '생성: 주사위', when: '상태창 만들기 · 주사위 칸', text: 'Pick d20 (DC 5~25) or d100 that fits the genre. 4-6 quick checks that this story will often need.' },
-    { key: 'gen.wallet', group: 'call', label: '생성: 재산', when: '상태창 만들기 · 재산 칸', text: "Currency that fits the world and {{user}}'s realistic starting money and 3-6 belongings. {difficulty}" },
+    { key: 'gen.wallet', group: 'call', label: '생성: 재산', when: '상태창 만들기 · 재산 칸', text: "Currency that fits the world and {{user}}'s realistic starting money and 3-6 belongings (give consumables a usable effect like 체력 +20). prices: 10-15 everyday things and services with typical prices so the world's economy is consistent. jobs: 2-4 odd jobs {{user}} could take with a daily pay and a cost (e.g. 기력 -20). regular: only what {{user}} realistically has (rent, salary, allowance) — may be empty. fx: for modern/real-world settings give the real currency and value, else rate 0. {difficulty}" },
     { key: 'gen.shop', group: 'call', label: '생성: 상점', when: '상태창 만들기 · 상점 칸', text: '2-4 shops {{user}} can realistically use, 5-8 items each, prices consistent with the currency and starting money. Include at least one shop with kind "deco" furniture/decor for the home.' },
     { key: 'gen.home', group: 'call', label: '생성: 본거지', when: '상태창 만들기 · 본거지 칸', text: "{{user}}'s base/home fitting the world (a room, a house, a ship, a dorm, a sect courtyard…), 2-5 rooms/areas, a few existing decor items." },
     { key: 'gen.rel', group: 'call', label: '생성: 관계', when: '상태창 만들기 · 관계 칸', text: 'Relationships between {{user}} and each main character (realistic starting aff/trust, usually -10~30 unless the sources say otherwise), plus notable relationships between characters.' },
@@ -32,10 +34,14 @@ export const PROMPT_DEFS = [
     { key: 'gen.board', group: 'call', label: '생성: 게시판', when: '상태창 만들기 · 게시판 칸 · 「새 글 불러오기」', text: 'A community board that fits the world (guild board, anonymous forum, school board, sect notice wall…): 3-5 posts by various locals with 0-3 replies each. Everyday life, requests, complaints, rumors, reactions to recent events. Nicknames fitting the world.' },
     { key: 'gen.ach', group: 'call', label: '생성: 업적', when: '상태창 만들기 · 업적 칸', text: '15-25 achievements fitting this story: exploration, relationships, growth, fun, hidden ones (hidden true). All done false.' },
     { key: 'gen.memo', group: 'call', label: '생성: 메모', when: '상태창 만들기 · 메모 칸', text: '1-3 short starting memos by ai (e.g. current goal, a rumor). inject true.' },
+    { key: 'gen.batch', group: 'call', label: '묶음 생성 규칙', when: '상태창 만들기 (묶음 생성)', text: 'This time fill {n} panels in ONE answer. Keep them consistent with each other (the same names, prices that fit the money, places that exist on the map, people who exist in the profiles). Give every panel the same care: the last panel must be as concrete and complete as the first. Do not shorten later panels.' },
     { key: 'gen.instruct', group: 'call', label: '추가 지시 규칙', when: '「AI로 수정」 (추가 지시)', text: 'Apply the instruction to the panel and return the WHOLE updated panel in the same JSON shape. Keep every part the instruction does not touch exactly as it is (same names, numbers, order). If the instruction asks to add things "fitting the story", use the recent story and world core.' },
     { key: 'ai.analyze', group: 'call', label: '별도 분석', when: '자동 반영 B(매 응답) · A+B(태그 빠졌을 때)', text: 'You are the state tracker of a roleplay status UI. Read the latest exchange and output ONLY a <status>…</status> block with what changed in this reply (one "key: value" per line). If nothing changed output <status></status>.' },
-    { key: 'ai.phone', group: 'call', label: '연락: 메신저 답장', when: '메시지를 보내고 답장 받을 때 (1번 = 1호출)', text: 'You are {who}, texting {{user}} through "{app}". Reply in character, in {outLang}, like real messages: 1-3 short bubbles, one per line, no narration, no quotes, no name prefix. If {who} would plausibly not answer right now, output exactly (읽지 않음).' },
+    { key: 'ai.phone', group: 'call', label: '연락: 메신저 답장', when: '메시지를 보내고 답장 받을 때 (1번 = 1호출)', text: 'You are {who}, texting {{user}} through "{app}". Reply in character, in {outLang}, like real messages: 1-3 short bubbles, one per line, no narration, no quotes, no name prefix. Bracketed items like [사진: …] or [선물: …] are things {{user}} attached — react to them naturally. If {who} would plausibly not even open the chat right now, output exactly (읽지 않음). If {who} reads it but chooses not to reply (busy, upset, playing hard to get), output exactly (읽음).' },
     { key: 'ai.letter', group: 'call', label: '연락: 편지 답장', when: '도착한 답장 편지를 열 때 (1통 = 1호출)', text: 'You are {who}, writing a reply letter to {{user}} by {courier}. In character, in {outLang}, as a real letter: greeting, 1-3 short paragraphs reacting to {{user}}\'s letter and to what happened since, a sign-off with {who}\'s name. No narration outside the letter. {rush}' },
+    { key: 'ai.csum', group: 'call', label: '연락: 대화 요약', when: '연락 반영 = 요약일 때 (대화가 쌓이면 · 「요약」 버튼)', text: 'Summarize this conversation between {{user}} and {who} in {outLang} in ONE short line (max ~60 characters): promises, plans, mood, important facts. No quotes, no names prefix.' },
+    { key: 'ai.price', group: 'call', label: '물가 질문', when: '재산 탭 「이거 얼마?」 (1번 = 1호출)', text: 'You know the prices of this world. Answer {{user}}\'s question in {outLang} in 1-2 short sentences: a concrete typical price in {currency} (a range is fine), consistent with the known prices. Then on a new line output exactly: PRICE: <item name> = <single number>' },
+    { key: 'gen.fate', group: 'call', label: '생성: 운명', when: '상태창 만들기 · 운명 칸', text: 'Fate panel for this world. curses: usually EMPTY at the start (only if the story already gives {{user}} a curse or blessing). deck: 12-16 event cards that fit this world and genre — a mix of luck, bad luck and neutral events, small and story-ready; each effect uses status lines (cash / stat / item / aff / cond / curse, several joined with ;). drawChance about 15-25. rules: 2-4 sensible automatic rules (e.g. money hits 0 → a curse; a gauge very low → a condition). {difficulty}' },
     { key: 'ai.ping', group: 'call', label: '연락: 선톡 (먼저 연락)', when: '「먼저 연락 오게」 버튼 · 자동 선톡', text: 'You are {who}. {who} decides to contact {{user}} first through "{app}" — for a reason that fits {who}\'s personality, the relationship and the recent story (missing them, news, a request, teasing, worry…). Write only the message itself in {outLang} ({format}). No narration, no name prefix.' },
     { key: 'ai.translate', group: 'call', label: '상태창 번역 (칸 JSON)', when: '상태창 생성 언어 = 영어일 때 생성마다 · 「상태창 전체 번역」 (칸 1개 = 1호출)', text: 'Translate every human-readable string value in this JSON into natural {lang}. Keep ALL keys, structure, order, numbers, booleans, ids, colors, emojis and empty values exactly as they are. Translate names consistently (transliterate foreign names). {glossary}\nOutput ONLY the JSON.' },
     { key: 'ai.translateText', group: 'call', label: '상태창 번역 (편지·메시지)', when: '상태창 생성 언어 = 영어일 때 답장·선톡마다', text: 'Translate this message/letter into natural {lang}. Keep the tone, speech style, line breaks and sign-off. {glossary}\nOutput ONLY the translation.' },
@@ -75,21 +81,12 @@ export function estTokens(t) {
 // ───── 사용 기록 ─────
 export const FEATURE_NAMES = {
     gen: '칸 생성', wizard: '상태창 만들기', instruct: '추가 지시', analyze: '별도 분석', phone: '메신저 답장', letter: '편지 답장',
-    ping: '선톡', autoping: '자동 선톡', translate: '번역', news: '뉴스 발행', gossip: '가십 발행', board: '게시판 새 글', boardReply: '게시판 댓글', quest: '의뢰 찾기',
+    ping: '선톡', autoping: '자동 선톡', csum: '연락 요약', price: '물가 질문', translate: '번역', news: '뉴스 발행', gossip: '가십 발행', board: '게시판 새 글', boardReply: '게시판 댓글', quest: '의뢰 찾기',
 };
 function recordUsage(entry) {
     const s = settings();
     s.usage = [...(s.usage ?? []), entry].slice(-120);
     saveSettings();
-    try {
-        const ledger = globalThis[Symbol.for('blue-lemonade.usage')];
-        const c = ctx();
-        ledger?.record?.({
-            ext: TITLE, feature: FEATURE_NAMES[entry.f] ?? entry.f,
-            model: entry.model || '', api: c.chatCompletionSettings?.chat_completion_source ?? c.mainApi ?? '',
-            input: entry.inp, output: entry.out, estimated: true, ok: entry.ok, at: entry.t, chatId: c.getCurrentChatId?.(),
-        });
-    } catch { /* optional */ }
 }
 
 // ───── 확장 AI 호출 ─────
@@ -103,12 +100,33 @@ async function connService() {
     if (c.ConnectionManagerRequestService) return c.ConnectionManagerRequestService;
     try { return (await import('/scripts/extensions/shared.js')).ConnectionManagerRequestService ?? null; } catch { return null; }
 }
+// 기능 묶음별 모델 (비우면 확장 AI 모델)
+export const FEATURE_GROUP = {
+    phone: 'profContact', letter: 'profContact', ping: 'profContact', autoping: 'profContact', csum: 'profContact', price: 'profGen',
+    gen: 'profGen', wizard: 'profGen', instruct: 'profGen',
+    news: 'profFeeds', gossip: 'profFeeds', board: 'profFeeds', boardReply: 'profFeeds', quest: 'profFeeds',
+    analyze: 'profAnalyze',
+};
+export function profileFor(feature) {
+    const s = settings();
+    const k = FEATURE_GROUP[feature];
+    return (k && s[k]) || s.aiProfile || '';
+}
+// 똑같은 요청이 이미 가고 있으면 또 보내지 않는다 (버튼 연타로 두 번 과금 방지)
+const inflight = new Set();
 export async function aiGenerate(feature, systemPrompt, prompt, maxTokens, opts = {}) {
+    const key = `${feature}\u0000${systemPrompt}\u0000${prompt}`;
+    if (inflight.has(key)) throw new Error('같은 요청을 이미 처리하고 있어요. 잠시만 기다려 주세요.');
+    inflight.add(key);
+    try { return await aiGenerateOnce(feature, systemPrompt, prompt, maxTokens, opts); }
+    finally { inflight.delete(key); }
+}
+async function aiGenerateOnce(feature, systemPrompt, prompt, maxTokens, opts = {}) {
     const c = ctx();
     const subst = (t) => (c.substituteParams ? c.substituteParams(t) : t);
     systemPrompt = subst(systemPrompt); prompt = subst(prompt);
     const max = maxTokens ?? settings().aiMaxTokens ?? 6000;
-    const id = opts.profile !== undefined && opts.profile !== '' ? opts.profile : settings().aiProfile;
+    const id = opts.profile !== undefined && opts.profile !== '' ? opts.profile : profileFor(feature);
     const entry = { t: Date.now(), f: feature, inp: estTokens(systemPrompt + prompt), out: 0, ok: false, model: '' };
     let text = '';
     try {
@@ -124,8 +142,12 @@ export async function aiGenerate(feature, systemPrompt, prompt, maxTokens, opts 
                     text = typeof r === 'string' ? r : (r?.content ?? '');
                 } catch (e) {
                     console.warn(LOG, 'profile request failed', e);
+                    if (!settings().aiFallbackMain) throw new Error(`연결 프로필 「${prof.name}」 요청 실패: ${e?.message ?? e}`);
                     toastr.warning(`연결 프로필 「${esc(prof.name)}」로 보내지 못해 메인 연결을 씁니다.`, TITLE);
                 }
+                if (!text && !settings().aiFallbackMain) throw new Error(`연결 프로필 「${prof.name}」이 빈 응답을 보냈어요.`);
+            } else if (!settings().aiFallbackMain) {
+                throw new Error('고른 연결 프로필을 찾지 못했어요. 확장 설정에서 모델을 다시 골라 주세요.');
             }
         }
         if (!text) {

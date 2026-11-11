@@ -6,6 +6,9 @@ import { ai1, emptyBox, seg, busyBtn, askConfirm, chip } from './kit.js';
 
 const Q_ST = { active: ['진행 중', 'fa-person-running'], open: ['받을 수 있음', 'fa-scroll'], done: ['완료', 'fa-circle-check'], failed: ['실패', 'fa-circle-xmark'] };
 
+// 보관함: 자동 정리로 옮겨진 옛 항목 (제목만)
+const arcBox = (d, label = '보관함') => (d.archive?.length ? `<details class="ss-arc"><summary><i class="fa-solid fa-box-archive"></i> ${label} ${d.archive.length}개</summary><ul>${[...d.archive].reverse().map(x => `<li><b>${esc(x.title)}</b>${x.status ? ` <small>${x.status === 'done' ? '완료' : x.status === 'failed' ? '실패' : esc(x.status)}</small>` : ''}${x.date ? ` <small>${esc(x.date)}</small>` : ''}</li>`).join('')}</ul></details>` : '');
+
 export function questView(s, d, ui) {
     ui.qf ??= d.list.some(q => q.status === 'active') ? 'active' : 'open';
     const count = (st) => d.list.filter(q => (st === 'end' ? q.status === 'done' || q.status === 'failed' : q.status === st)).length;
@@ -23,6 +26,7 @@ export function questView(s, d, ui) {
                 : q.status === 'active' ? `<button class="ss-btn pri sm" data-act="qdone" data-arg="${esc(q.id)}"><i class="fa-solid fa-flag-checkered"></i> 완료 · 보상 받기</button><button class="ss-btn sm ghost" data-act="qset" data-arg="${esc(q.id)}|failed">포기</button>`
                 : `<button class="ss-btn sm ghost" data-act="qdel" data-arg="${esc(q.id)}"><i class="fa-solid fa-trash-can"></i> 지우기</button>`}</div>
         </article>`).join('') || emptyBox(ui.qf === 'active' ? '진행 중인 퀘스트가 없어요' : ui.qf === 'open' ? '받을 수 있는 의뢰가 없어요' : '끝난 퀘스트가 없어요', 'fa-scroll')}</div>
+        ${ui.qf === 'end' ? arcBox(d, '오래된 퀘스트') : ''}
         <div class="ss-row-btns"><button class="ss-btn" data-act="qfind">${ai1} 의뢰 찾기</button><button class="ss-btn ghost" data-act="qnew"><i class="fa-solid fa-plus"></i> 직접 추가</button></div>
         ${ui.qnew ? `<div class="ss-card ss-form"><input class="ss-in ss-q-t" placeholder="이름 (예: 잃어버린 고양이 찾기)"><textarea class="ss-in ss-q-d" rows="2" placeholder="내용"></textarea><div class="ss-inline"><input class="ss-in ss-q-g" placeholder="의뢰인"><input class="ss-in n ss-q-c" type="number" placeholder="보상금"></div><button class="ss-btn pri" data-act="qadd">추가 (바로 진행)</button></div>` : ''}
     </div>`;
@@ -37,6 +41,7 @@ export function newsView(s, d, ui) {
             <p class="ss-art-b">${esc(x.body)}</p>
             <div class="ss-art-f"><small>${esc(x.date)}</small><button class="ss-ib" data-act="ndel" data-arg="${esc(x.id)}" title="지우기"><i class="fa-solid fa-trash-can"></i></button></div>
         </article>`).join('') || emptyBox('아직 기사가 없어요', 'fa-newspaper')}</div>
+        ${arcBox(d, '지난 기사')}
         <button class="ss-btn" data-act="nnew">${ai1} 새 소식 발행</button>
     </div>`;
 }
@@ -50,6 +55,7 @@ export function gossipView(s, d) {
             <p>${esc(x.body)}</p>
             <div class="ss-art-f">${x.about.map(n => chip(esc(n))).join('')}<small>${esc(x.date)}</small><button class="ss-ib" data-act="gdel" data-arg="${esc(x.id)}"><i class="fa-solid fa-trash-can"></i></button></div>
         </article>`).join('') || emptyBox('조용한 날이네요. 아직 소문이 없어요', 'fa-wine-glass')}</div>
+        ${arcBox(d, '지난 호')}
         <button class="ss-btn" data-act="gnew">${ai1} 새 호 발행</button>
     </div>`;
 }
@@ -72,6 +78,7 @@ export function boardView(s, d, ui) {
     return `<div class="ss-board">
         <div class="ss-tab-mast board"><b>${esc(d.name || '게시판')}</b><small>글 ${d.posts.length}개</small></div>
         <div class="ss-posts">${list.map(p => `<div class="ss-post" data-act="bopen" data-arg="${esc(p.id)}">${p.tag ? `<em class="ss-tagc">${esc(p.tag)}</em>` : ''}<b>${esc(p.title)}</b>${p.replies.length ? `<span class="ss-rc">[${p.replies.length}]</span>` : ''}<small>${esc(p.mine ? userName() : p.author)}${p.mine ? ' · 내 글' : ''}</small></div>`).join('') || emptyBox('글이 없어요', 'fa-clipboard-list')}</div>
+        ${arcBox(d, '지난 글')}
         <div class="ss-row-btns"><button class="ss-btn" data-act="bnew">${ai1} 새 글 불러오기</button><button class="ss-btn ghost" data-act="bwrite"><i class="fa-solid fa-pen-to-square"></i> 글쓰기</button></div>
         ${ui.write ? `<div class="ss-card ss-form"><input class="ss-in ss-p-t" placeholder="제목"><textarea class="ss-in ss-p-b" rows="4" placeholder="내용"></textarea><label class="ss-tog"><input type="checkbox" class="ss-switch ss-p-anon"><span>익명으로</span></label><button class="ss-btn pri" data-act="bpost">올리기</button></div>` : ''}
     </div>`;

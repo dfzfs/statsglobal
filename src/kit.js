@@ -6,6 +6,7 @@ export async function popup(el, opts = {}) {
     const { Popup, POPUP_TYPE } = ctx();
     const p = new Popup(el, opts.type ?? POPUP_TYPE.TEXT, '', { wide: true, large: !!opts.large, allowVerticalScrolling: true, okButton: opts.okButton ?? '닫기', ...opts });
     p.dlg?.classList.add('ss-dlg', 'ss-scope');
+    if (opts.full) p.dlg?.classList.add('ss-full');
     return await p.show();
 }
 export async function confirmPopup(el, ok = '적용', cancel = '취소') {
