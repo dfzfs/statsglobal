@@ -315,7 +315,7 @@ export function applyOp(s, rawKey, rawVal, info) {
             const t = nowTick(s, info.meta);
             const letter = ct.mode === 'letter';
             const cour = letter ? (findBy(ct.couriers, findBy(ct.contacts, who)?.courier)?.name ?? ct.couriers[0]?.name ?? '') : '';
-            (ct.threads[who] ??= []).push({ id: `${info.seed}:m`, from: 'them', text, date: stamp(s), at: t, arrive: t, courier: cour, express: false, rush: false, pending: false, fee: 0, edited: false, ping: true });
+            (ct.threads[who] ??= []).push({ id: `${info.seed}:m${ct.threads[who].length}`, from: 'them', text, date: stamp(s), at: t, arrive: t, courier: cour, express: false, rush: false, pending: false, fee: 0, edited: false, ping: true });
             if (ct.threads[who].length > 80) ct.threads[who] = ct.threads[who].slice(-80);
             ct.unread[who] = (ct.unread[who] ?? 0) + 1;
             L(`${letter ? '✉️ 편지' : '💬'} ${who}`);
@@ -566,6 +566,7 @@ export function buildInjection(r) {
     const PP = [];
     L.push(P('inj.header'));
     L.push(P(`diff.${diffOf(meta)}`));
+    if (set.genLang === 'en') L.push(P('inj.lang'));
     if (s.core.title || s.core.summary) {
         L.push(`World: ${s.core.title}${s.core.genre ? ` (${s.core.genre})` : ''}${s.core.canon ? ` · canon: ${s.core.canon}` : ''}${s.core.tone ? ` · tone: ${s.core.tone}` : ''}`);
         if (s.core.summary && !lite) L.push(`Setting: ${short(s.core.summary, 600)}`);
@@ -652,7 +653,7 @@ export function buildInjection(r) {
     if (s.recent.length) L.push(`Since the last reply {{user}} did (via the status UI): ${s.recent.slice(-8).join(' / ')}`);
     if (set.sync === 'tag' || set.sync === 'tagPlus') {
         L.push(P('inj.output'));
-        L.push(`Keys: ${tagKeysFor(meta).join(' · ')}`);
+        L.push(lite ? `Keys (key: value, ±N for numbers, +/-name for lists, name | detail): ${tagKeysFor(meta).map(k => k.match(/(^|· )([a-z]+) \(/g)?.map(x => x.replace(/[·( ]/g, '')).join(' ')).join(' ')}` : `Keys: ${tagKeysFor(meta).join(' · ')}`);
         if (!lite) L.push(P('inj.example'));
     }
     return { main: L.filter(Boolean).join('\n'), people: PP.length ? `[STATUS SIM — PEOPLE (part of the state above)]\n${PP.join('\n')}` : '' };

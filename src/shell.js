@@ -589,7 +589,8 @@ export async function openPromptWindow(tab = 'when') {
                 ${row('fa-comment', '메신저 답장', '보낼 때마다 (「답장 받기」 끄면 0) · 다시 받기 1회', '1회')}
                 ${row('fa-envelope-open-text', '편지 「뜯어 보기」', '도착한 답장 1통마다. 부치는 것 자체는 0', '1회')}
                 ${row('fa-paper-plane', '선톡 · 편지 오게', '누를 때', '1회')}
-                ${row('fa-newspaper', '새 소식 발행 · 새 호 발행 · 새 글 불러오기 · 댓글 달리기 · 의뢰 찾기', '누를 때', '각 1회')}`)}
+                ${row('fa-newspaper', '새 소식 발행 · 새 호 발행 · 새 글 불러오기 · 댓글 달리기 · 의뢰 찾기', '누를 때', '각 1회')}
+                ${row('fa-language', `후번역 — ${set.trMode === 'auto' ? '자동 (새 답마다)' : set.trMode === 'manual' ? '버튼으로만' : '꺼짐'}`, `번역 모델(${set.trProfile ? '고른 연결 프로필' : set.aiProfile ? '확장 AI 모델' : '메인 연결'})로 메시지 1개 = 1회. 입력≈원문, 출력≈번역문`, set.trMode === 'auto' ? '매 답' : set.trMode === 'manual' ? '누를 때' : '꺼짐', set.trMode !== 'off')}`)}
             ${sec('③ 설정에 따라 자동', `
                 ${row('fa-magnifying-glass', `별도 분석 — 지금: ${syncTxt}`, 'B: 매 AI 응답마다 1회 · A+B: 응답에 &lt;status&gt;가 빠졌을 때만', set.sync === 'analyze' ? '매 응답' : set.sync === 'tagPlus' ? '가끔' : '꺼짐', set.sync === 'analyze' || set.sync === 'tagPlus')}
                 ${row('fa-bell', `자동 선톡 — ${set.autoPing ? `켬 (${set.autoPingEvery}턴마다 확률)` : '꺼짐'}`, '켜 두면 가끔 누군가 먼저 연락해요', set.autoPing ? '가끔' : '꺼짐', set.autoPing)}`)}

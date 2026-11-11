@@ -743,6 +743,11 @@ dialog.ss-dlg .popup-content > .ss-root, dialog.ss-dlg .popup-content > .ss-pane
 .ss-mchip.pos { color: var(--ss-pos); } .ss-mchip.neg { color: var(--ss-neg); }
 .ss-msgcard button.ss-mchip.roll, .mes_text .ss-msgcard .ss-mchip.roll { background: var(--ss-acc); color: var(--ss-accInk); border-color: var(--ss-acc); cursor: pointer; }
 
+/* 번역 단추 */
+.ss-trbar { display: flex; justify-content: flex-end; margin-top: 4px; }
+.ss-trbar .ss-trbtn { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--ss-line); background: var(--ss-bg); color: var(--ss-dim); font-size: 11.5px; font-weight: 600; cursor: pointer; box-shadow: none; margin: 0; opacity: .75; }
+.ss-trbar .ss-trbtn:hover { opacity: 1; color: var(--ss-ink); }
+
 /* 실리 팝업 */
 dialog.popup.ss-dlg { background: var(--ss-bg) !important; color: var(--ss-ink) !important; border: 1px solid var(--ss-line) !important; box-shadow: var(--ss-shadow) !important; }
 dialog.popup.ss-dlg .popup-content { color: var(--ss-ink); }

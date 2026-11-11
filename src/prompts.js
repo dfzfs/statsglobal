@@ -10,6 +10,7 @@ export const PROMPT_DEFS = [
     { key: 'inj.example', group: 'inject', label: '<status> 예시', when: '본편 생성마다 (규칙 주입: 전체일 때만)', text: 'Example:\n<status>\nstat: 체력 -8\ncash: -120\nitem: +낡은 열쇠\nloc: 항구 창고\naff: 레온 +3\n</status>' },
     { key: 'inj.dice', group: 'inject', label: '주사위 규칙', when: '본편 생성마다 (주사위 켬)', text: "Dice: when {{user}}'s message contains [판정 · …], that result was rolled by the system — narrate exactly that outcome (대성공/성공/실패/대실패). Don't roll dice yourself. For risky actions whose outcome is uncertain, ask for a roll with the roll key instead of deciding." },
     { key: 'inj.letter', group: 'inject', label: '편지 세계 규칙', when: '본편 생성마다 (연락 = 편지)', text: 'Communication: there are no phones. Letters ({app}) take time to arrive (days, by courier). Do not let distant characters react to a letter before it has arrived. A paid express courier can deliver the same day.' },
+    { key: 'inj.lang', group: 'inject', label: '본편 생성 언어 (영어)', when: '본편 생성마다 (생성 언어 = 영어일 때)', text: 'LANGUAGE: Write all narration and dialogue in English. (The <status> block still uses the exact Korean names and values listed above.)' },
     { key: 'diff.easy', group: 'inject', label: '난이도: 이지', when: '본편 생성마다 (이 난이도일 때)', text: 'DIFFICULTY: EASY — a forgiving world. Mistakes rarely cost much; money, food and help are easy to find; people warm up quickly (aff +2~8 for a good moment); failures become small setbacks or comedy, never lasting harm.' },
     { key: 'diff.normal', group: 'inject', label: '난이도: 보통', when: '본편 생성마다 (이 난이도일 때)', text: 'DIFFICULTY: NORMAL — fair. Choices have real but recoverable consequences. aff +1~5 for ordinary good moments, +6~10 only for big ones; trust is earned through actions.' },
     { key: 'diff.hard', group: 'inject', label: '난이도: 하드', when: '본편 생성마다 (이 난이도일 때)', text: 'DIFFICULTY: HARD — unforgiving. Resources are scarce and prices high; people are guarded (aff +1~3, trust rises slowly and drops fast; betrayal is possible); failures leave lasting costs (injury, debt, lost items, enemies). Never rescue {{user}} for free; let bad decisions bite.' },
@@ -37,6 +38,7 @@ export const PROMPT_DEFS = [
     { key: 'ai.phone', group: 'call', label: '연락: 메신저 답장', when: '메시지를 보내고 답장 받을 때 (1번 = 1호출)', text: 'You are {who}, texting {{user}} through "{app}". Reply in character, in Korean, like real messages: 1-3 short bubbles, one per line, no narration, no quotes, no name prefix. If {who} would plausibly not answer right now, output exactly (읽지 않음).' },
     { key: 'ai.letter', group: 'call', label: '연락: 편지 답장', when: '도착한 답장 편지를 열 때 (1통 = 1호출)', text: 'You are {who}, writing a reply letter to {{user}} by {courier}. In character, in Korean, as a real letter: greeting, 1-3 short paragraphs reacting to {{user}}\'s letter and to what happened since, a sign-off with {who}\'s name. No narration outside the letter. {rush}' },
     { key: 'ai.ping', group: 'call', label: '연락: 선톡 (먼저 연락)', when: '「먼저 연락 오게」 버튼 · 자동 선톡', text: 'You are {who}. {who} decides to contact {{user}} first through "{app}" — for a reason that fits {who}\'s personality, the relationship and the recent story (missing them, news, a request, teasing, worry…). Write only the message itself in Korean ({format}). No narration, no name prefix.' },
+    { key: 'ai.translate', group: 'call', label: '후번역', when: '번역 켬 — 새 답마다 / 「번역」 버튼 (메시지 1개 = 1호출)', text: 'You are a literary translator for a roleplay chat. Translate the user\'s text into natural, fluent {lang}. Keep the tone, speech styles, line breaks and formatting (markdown, *actions*, "quotes", HTML tags) exactly. Do not add, omit, summarize or comment. {glossary}\nOutput ONLY the translation.' },
     { key: 'ai.boardReply', group: 'call', label: '게시판: 댓글 받기', when: '게시판 글에 「댓글 달리기」', text: 'Locals of this world reply to a community post. Write 2-4 replies with fitting nicknames (or known characters if they would plausibly comment). Output ONLY JSON: {"replies":[{"author":"닉네임","text":"댓글"}]}' },
 ];
 export const PROMPT_MAP = Object.fromEntries(PROMPT_DEFS.map(p => [p.key, p]));
@@ -72,7 +74,7 @@ export function estTokens(t) {
 // ───── 사용 기록 ─────
 export const FEATURE_NAMES = {
     gen: '칸 생성', wizard: '상태창 만들기', instruct: '추가 지시', analyze: '별도 분석', phone: '메신저 답장', letter: '편지 답장',
-    ping: '선톡', autoping: '자동 선톡', news: '뉴스 발행', gossip: '가십 발행', board: '게시판 새 글', boardReply: '게시판 댓글', quest: '의뢰 찾기',
+    ping: '선톡', autoping: '자동 선톡', translate: '번역', news: '뉴스 발행', gossip: '가십 발행', board: '게시판 새 글', boardReply: '게시판 댓글', quest: '의뢰 찾기',
 };
 function recordUsage(entry) {
     const s = settings();
@@ -100,12 +102,12 @@ async function connService() {
     if (c.ConnectionManagerRequestService) return c.ConnectionManagerRequestService;
     try { return (await import('/scripts/extensions/shared.js')).ConnectionManagerRequestService ?? null; } catch { return null; }
 }
-export async function aiGenerate(feature, systemPrompt, prompt, maxTokens) {
+export async function aiGenerate(feature, systemPrompt, prompt, maxTokens, opts = {}) {
     const c = ctx();
     const subst = (t) => (c.substituteParams ? c.substituteParams(t) : t);
     systemPrompt = subst(systemPrompt); prompt = subst(prompt);
     const max = maxTokens ?? settings().aiMaxTokens ?? 6000;
-    const id = settings().aiProfile;
+    const id = opts.profile !== undefined && opts.profile !== '' ? opts.profile : settings().aiProfile;
     const entry = { t: Date.now(), f: feature, inp: estTokens(systemPrompt + prompt), out: 0, ok: false, model: '' };
     let text = '';
     try {

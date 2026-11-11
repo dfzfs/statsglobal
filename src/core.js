@@ -2,7 +2,7 @@
 export const MODULE = 'statussim';
 export const LOG = '[상태창 시뮬]';
 export const TITLE = '상태창 시뮬';
-export const VERSION = '2.0.0';
+export const VERSION = '2.1.0';
 export const INJECT_KEY = 'statussim_state';
 export const INJECT_KEY2 = 'statussim_people';
 export const PROMPT_IN_CHAT = 1;
@@ -44,6 +44,11 @@ export const DEFAULTS = Object.freeze({
     fontScale: 1,
     radius: 12,
     defaultMods: null,
+    genLang: 'ko',           // 본편 생성 언어: ko | en
+    trMode: 'off',           // 후번역: off | auto(새 답 자동) | manual(버튼만)
+    trProfile: '',           // 번역에 쓸 연결 프로필 ('' = 확장 AI 모델 → 없으면 메인)
+    trLang: '한국어',
+    trUser: false,
     prompts: {},             // 사용자 수정 프롬프트
     usage: [],               // 확장 AI 사용 기록
 });
