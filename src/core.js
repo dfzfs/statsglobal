@@ -2,7 +2,7 @@
 export const MODULE = 'statussim';
 export const LOG = '[상태창 시뮬]';
 export const TITLE = '상태창 시뮬';
-export const VERSION = '2.1.0';
+export const VERSION = '2.3.0';
 export const INJECT_KEY = 'statussim_state';
 export const INJECT_KEY2 = 'statussim_people';
 export const PROMPT_IN_CHAT = 1;
@@ -48,8 +48,27 @@ export const DEFAULTS = Object.freeze({
     trProfile: '',           // 번역 모델 (연결 프로필, '' = 확장 AI 모델 → 없으면 메인)
     trLang: '한국어',
     prompts: {},             // 사용자 수정 프롬프트
+    stashTags: true,         // <status>를 읽은 뒤 본문에서 떼어 메시지 숨은 칸에 보관 (다른 확장·요약에 안 보임)
+    aiFallbackMain: true,    // 연결 프로필 실패·빈 응답 때 메인 연결로 다시 보냄
+    profContact: '',         // 기능별 모델 (연결 프로필, '' = 확장 AI 모델)
+    profGen: '',
+    profFeeds: '',
+    profAnalyze: '',
+    sheetFull: false,        // 상태창을 전체화면으로 열기
+    genBatch: true,          // 상태창 만들기: 관련 칸끼리 묶어서 한 번에 생성 (17번 → 6번)
+    genParallel: 4,          // 동시에 보낼 생성 요청 수
+    sceneFilter: true,       // 최근 대화에 나온 인물만 자세히 주입, 나머지는 이름만
+    sceneTurns: 6,           // 장면 판단에 볼 최근 메시지 수
+    pinCap: 8,               // 주입할 고정 메모 최대 개수
+    contactReflect: 'auto',  // 연락 → 본편 반영: off | auto | pinned | summary
     usage: [],               // 확장 AI 사용 기록
 });
+
+// 연락: 최근에 주고받은 상대를 맨 앞으로 (본편 주입 순서)
+export function touchContact(ct, who) {
+    if (!ct || !who) return;
+    ct.recent = [who, ...(ct.recent ?? []).filter(x => x !== who)].slice(0, 30);
+}
 
 export const MODS = [
     { id: 'profile', name: '프로필', icon: 'fa-id-card', desc: '유저·캐릭터·NPC 프로필 시트' },
@@ -68,6 +87,7 @@ export const MODS = [
     { id: 'board', name: '게시판', icon: 'fa-clipboard-list', desc: '커뮤니티 · 길드 게시판 (글·댓글)' },
     { id: 'ach', name: '업적', icon: 'fa-trophy', desc: '세계관 맞춤 업적' },
     { id: 'memo', name: '메모', icon: 'fa-note-sticky', desc: '내 메모 · AI 메모' },
+    { id: 'fate', name: '운명', icon: 'fa-hat-wizard', desc: '저주·축복 · 이벤트 카드 · 자동 규칙 · 미니게임' },
 ];
 export const MOD = Object.fromEntries(MODS.map(m => [m.id, m]));
 export const MOD_IDS = MODS.map(m => m.id);
@@ -116,7 +136,9 @@ export const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n
 export const str = (v, d = '') => (v === null || v === undefined ? d : String(v));
 export const arr = (v) => (Array.isArray(v) ? v : []);
 export const norm = (x) => String(x ?? '').replace(/\s+/g, '').toLowerCase();
-export const fmtNum = (n) => Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+// 포맷터를 한 번만 만든다 (toLocaleString은 부를 때마다 새로 만들어서 긴 채팅에서 느렸음)
+const NUM_FMT = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
+export const fmtNum = (n) => NUM_FMT.format(Number(n));
 export const signed = (n) => (n > 0 ? `+${fmtNum(n)}` : n < 0 ? `−${fmtNum(Math.abs(n))}` : '±0');
 export const uid = () => Math.random().toString(36).slice(2, 9);
 export const short = (t, n) => { t = String(t ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
@@ -160,7 +182,9 @@ export function settings() {
         s.showFloat = s.uiMode !== 'side'; s.showSide = s.uiMode !== 'float'; delete s.uiMode;
     }
     if (s.theme && !['white', 'cream', 'ink', 'rose', 'mint', 'st', 'custom'].includes(s.theme)) s.theme = 'white';
+    const fresh = !Object.hasOwn(s, 'contactReflect');
     for (const k of Object.keys(DEFAULTS)) if (!Object.hasOwn(s, k)) s[k] = clone(DEFAULTS[k]);
+    if (fresh && s.contactInject === false) s.contactReflect = 'off'; // v2.2 이전 '연락 알려 주기' 끔 → 반영 끔
     return s;
 }
 export const saveSettings = () => ctx().saveSettingsDebounced();
@@ -218,26 +242,41 @@ export const EMPTY = {
     profile: () => ({ mode: 'minimal', list: [] }),
     stats: () => ({ bars: [], attrs: [], conds: [] }),
     dice: () => ({ system: 'd20', rules: '', quick: [], log: [] }),
-    wallet: () => ({ currency: '골드', cash: 0, items: [] }),
+    wallet: () => ({ currency: '골드', cash: 0, items: [], prices: [], fx: { unit: '', rate: 0 }, loans: [], regular: [], jobs: [] }),
     shop: () => ({ shops: [] }),
     home: () => ({ name: '', desc: '', rooms: [], storage: [] }),
     rel: () => ({ user: [], pairs: [] }),
     map: () => ({ name: '', here: '', places: [] }),
     calendar: () => ({ y: 1, m: 1, d: 1, time: '아침', era: '', months: clone(DEFAULT_MONTHS), week: [...DEFAULT_WEEK], times: [...DEFAULT_TIMES], events: [] }),
-    contact: () => ({ mode: 'phone', app: '메신저', contacts: [], threads: {}, unread: {}, couriers: clone(COURIER_PRESETS.slice(0, 1)), express: { name: '급행 (퀵)', fee: 100 } }),
+    contact: () => ({ mode: 'phone', app: '메신저', contacts: [], threads: {}, unread: {}, recent: [], couriers: clone(COURIER_PRESETS.slice(0, 1)), express: { name: '급행 (퀵)', fee: 100 } }),
     quest: () => ({ list: [] }),
     news: () => ({ name: '', items: [] }),
     gossip: () => ({ name: '', issues: [] }),
     board: () => ({ name: '', posts: [] }),
     ach: () => ({ list: [] }),
     memo: () => ({ list: [] }),
+    fate: () => ({ curses: [], deck: [], drawChance: 20, rules: [], log: [], today: null }),
 };
 
 const msgN = (x) => ({
     id: str(x.id) || uid(), from: x.from === 'me' ? 'me' : 'them', text: str(x.text), date: str(x.date),
     at: Number.isFinite(Number(x.at)) ? Number(x.at) : null, arrive: Number.isFinite(Number(x.arrive)) ? Number(x.arrive) : null,
     courier: str(x.courier), express: !!x.express, rush: !!x.rush, pending: !!x.pending, fee: num(x.fee, 0), edited: !!x.edited, ping: !!x.ping,
+    kind: MSG_KINDS.includes(x.kind) ? x.kind : 'text', pin: !!x.pin, read: !!x.read, react: str(x.react), orig: str(x.orig), amount: num(x.amount, 0),
 });
+// 연락 메시지 종류: 글 · 사진/음성/파일/위치 묘사 · 선물 · 송금 · 삭제됨
+export const MSG_KINDS = ['text', 'photo', 'voice', 'file', 'place', 'gift', 'money', 'deleted'];
+const KIND_TAG = { photo: '사진', voice: '음성 메시지', file: '파일', place: '위치', gift: '선물' };
+// AI에게 보여 줄 메시지 한 줄 (첨부·반응·삭제 표시 포함)
+export function msgText(m, max = 0) {
+    const t = max ? short(m.text, max) : m.text;
+    let out;
+    if (m.kind === 'deleted') out = `[보냈다가 지운 메시지${m.read && m.orig ? ` — 이미 읽음: ${max ? short(m.orig, max) : m.orig}` : ''}]`;
+    else if (m.kind === 'money') out = `[송금 ${fmtNum(m.amount)}]${t ? ` ${t}` : ''}`;
+    else if (KIND_TAG[m.kind]) out = `[${KIND_TAG[m.kind]}: ${t}]`;
+    else out = t;
+    return m.react ? `${out} (반응 ${m.react})` : out;
+}
 const courierN = (c) => ({ name: str(c.name), icon: str(c.icon, '✉️') || '✉️', min: clamp(Math.round(num(c.min, 1)), 0, 60), max: clamp(Math.round(num(c.max, num(c.min, 1))), 0, 60), fee: Math.max(0, num(c.fee, 0)), note: str(c.note) });
 
 export const NORM = {
@@ -261,7 +300,16 @@ export const NORM = {
     }),
     wallet: (d) => ({
         currency: str(d.currency, '골드') || '골드', cash: num(d.cash, 0),
-        items: arr(d.items).filter(i => i?.name).map(i => ({ name: str(i.name), qty: Math.max(0, Math.round(num(i.qty, 1))), desc: str(i.desc) })),
+        items: arr(d.items).filter(i => i?.name).map(i => ({ name: str(i.name), qty: Math.max(0, Math.round(num(i.qty, 1))), desc: str(i.desc), effect: str(i.effect) })),
+        prices: arr(d.prices).filter(p => p?.name).map(p => ({ name: str(p.name), price: Math.max(0, num(p.price, 0)) })).slice(0, 40),
+        fx: { unit: str(d.fx?.unit), rate: Math.max(0, num(d.fx?.rate, 0)) },
+        loans: arr(d.loans).filter(l => l && num(l.owed, 0) > 0).map(l => ({
+            id: str(l.id) || uid(), kind: ['bank', 'shark', 'pawn'].includes(l.kind) ? l.kind : 'bank', lender: str(l.lender),
+            principal: Math.max(0, num(l.principal, 0)), owed: Math.max(0, num(l.owed, 0)), due: Number.isFinite(Number(l.due)) && l.due !== null && l.due !== '' ? Number(l.due) : null,
+            item: str(l.item), status: ['open', 'paid', 'late', 'lost'].includes(l.status) ? l.status : 'open',
+        })).slice(-30),
+        regular: arr(d.regular).filter(r => r?.name).map(r => ({ name: str(r.name), amount: num(r.amount, 0), every: ['day', 'week', 'month'].includes(r.every) ? r.every : 'month', next: Number.isFinite(Number(r.next)) && r.next !== null && r.next !== '' ? Number(r.next) : null })),
+        jobs: arr(d.jobs).filter(j => j?.name).map(j => ({ name: str(j.name), pay: Math.max(0, num(j.pay, 0)), effect: str(j.effect) })),
     }),
     shop: (d) => ({
         shops: arr(d.shops).filter(s => s?.name).map(s => ({
@@ -295,14 +343,16 @@ export const NORM = {
     contact: (d) => {
         const threads = {};
         for (const [k, v] of Object.entries(d.threads && typeof d.threads === 'object' ? d.threads : {})) {
-            threads[k] = arr(v).filter(x => x && (x.text || x.pending)).map(msgN).slice(-80);
+            threads[k] = arr(v).filter(x => x && (x.text || x.pending || (x.kind && x.kind !== 'text'))).map(msgN).slice(-80); // 송금·삭제됨은 글이 없어도 남긴다
         }
         const mode = ['phone', 'instant', 'letter'].includes(d.mode) ? d.mode : 'phone';
         const couriers = arr(d.couriers).filter(c => c?.name).map(courierN);
         return {
             mode, app: str(d.app, CONTACT_MODES[mode].app) || CONTACT_MODES[mode].app,
-            contacts: arr(d.contacts).filter(c => c?.name).map(c => ({ name: str(c.name), handle: str(c.handle), status: str(c.status), courier: str(c.courier) })),
+            contacts: arr(d.contacts).filter(c => c?.name).map(c => ({ name: str(c.name), handle: str(c.handle), status: str(c.status), courier: str(c.courier), reflect: ['always', 'pinned', 'never'].includes(c.reflect) ? c.reflect : '', blocked: !!c.blocked })),
+            summaries: Object.fromEntries(Object.entries(d.summaries && typeof d.summaries === 'object' ? d.summaries : {}).filter(([, v]) => v?.text).map(([k, v]) => [k, { text: str(v.text), n: Math.max(0, Math.round(num(v.n, 0))) }])),
             threads, unread: d.unread && typeof d.unread === 'object' ? { ...d.unread } : {},
+            recent: arr(d.recent).map(String).filter(Boolean).slice(0, 30),
             couriers: couriers.length ? couriers : clone(COURIER_PRESETS.slice(0, 1)),
             express: { name: str(d.express?.name, '급행 (퀵)') || '급행 (퀵)', fee: Math.max(0, num(d.express?.fee, 100)) },
         };
@@ -315,21 +365,59 @@ export const NORM = {
             steps: arr(q.steps).map(s => (typeof s === 'string' ? { text: s, done: false } : { text: str(s?.text), done: !!s?.done })).filter(s => s.text),
             paid: !!q.paid,
         })),
+        archive: arr(d.archive),
     }),
-    news: (d) => ({ name: str(d.name), items: arr(d.items).filter(x => x?.title).map(x => ({ id: str(x.id) || uid(), title: str(x.title), body: str(x.body), tag: str(x.tag), date: str(x.date), read: !!x.read })).slice(-40) }),
-    gossip: (d) => ({ name: str(d.name), issues: arr(d.issues).filter(x => x?.title).map(x => ({ id: str(x.id) || uid(), title: str(x.title), body: str(x.body), about: arr(x.about).map(String).filter(Boolean), heat: clamp(Math.round(num(x.heat, 2)), 1, 3), date: str(x.date), read: !!x.read })).slice(-30) }),
+    news: (d) => ({ name: str(d.name), items: arr(d.items).filter(x => x?.title).map(x => ({ id: str(x.id) || uid(), title: str(x.title), body: str(x.body), tag: str(x.tag), date: str(x.date), read: !!x.read })), archive: arr(d.archive) }),
+    gossip: (d) => ({ name: str(d.name), issues: arr(d.issues).filter(x => x?.title).map(x => ({ id: str(x.id) || uid(), title: str(x.title), body: str(x.body), about: arr(x.about).map(String).filter(Boolean), heat: clamp(Math.round(num(x.heat, 2)), 1, 3), date: str(x.date), read: !!x.read })), archive: arr(d.archive) }),
     board: (d) => ({
         name: str(d.name),
         posts: arr(d.posts).filter(p => p?.title).map(p => ({
             id: str(p.id) || uid(), author: str(p.author, '익명') || '익명', title: str(p.title), body: str(p.body), date: str(p.date), mine: !!p.mine, tag: str(p.tag),
             replies: arr(p.replies).filter(r => r?.text).map(r => ({ id: str(r.id) || uid(), author: str(r.author, '익명') || '익명', text: str(r.text), mine: !!r.mine })),
-        })).slice(-40),
+        })),
+        archive: arr(d.archive),
     }),
     ach: (d) => ({ list: arr(d.list).filter(a => a?.name).map(a => ({ name: str(a.name), desc: str(a.desc), done: !!a.done, hidden: !!a.hidden, at: str(a.at) })) }),
     memo: (d) => ({ list: arr(d.list).filter(m => m?.text).map(m => ({ id: str(m.id) || uid(), text: str(m.text), by: m.by === 'ai' ? 'ai' : 'user', inject: m.inject !== false, pin: !!m.pin })) }),
+    fate: (d) => ({
+        curses: arr(d.curses).filter(c => c?.name).map(c => ({
+            name: str(c.name), desc: str(c.desc), effects: (Array.isArray(c.effects) ? c.effects : String(c.effects ?? '').split(/\s*[,;\n]\s*/)).map(String).map(x => x.trim()).filter(Boolean),
+            days: Number.isFinite(Number(c.days)) && Number(c.days) > 0 ? Math.round(Number(c.days)) : null, since: Number.isFinite(Number(c.since)) && c.since !== null && c.since !== '' ? Number(c.since) : null,
+            cure: str(c.cure), kind: c.kind === 'bless' ? 'bless' : 'curse', auto: str(c.auto),
+        })),
+        deck: arr(d.deck).filter(x => x?.title).map(x => ({ title: str(x.title), desc: str(x.desc), kind: ['luck', 'bad', 'event'].includes(x.kind) ? x.kind : 'event', effect: str(x.effect) })).slice(0, 60),
+        drawChance: clamp(Math.round(num(d.drawChance, 20)), 0, 100),
+        rules: arr(d.rules).filter(r => r?.when && r?.then).map(r => ({ name: str(r.name) || str(r.when), when: str(r.when), then: str(r.then), on: !!r.on })),
+        log: arr(d.log).filter(x => x?.title).map(x => ({ title: str(x.title), kind: str(x.kind), date: str(x.date) })).slice(-30),
+        today: d.today?.title ? { title: str(d.today.title), desc: str(d.today.desc), day: num(d.today.day, 0) } : null,
+    }),
 };
 export function normalize(mod, d) {
-    try { return NORM[mod](d && typeof d === 'object' ? d : {}); } catch (e) { console.warn(LOG, 'normalize', mod, e); return EMPTY[mod](); }
+    try { return tidy(mod, NORM[mod](d && typeof d === 'object' ? d : {})); } catch (e) { console.warn(LOG, 'normalize', mod, e); return EMPTY[mod](); }
+}
+// ───── 자동 정리: 오래된 소식·끝난 퀘스트는 보관함(제목만)으로 ─────
+export const ARC_KEEP = { news: 40, gossip: 30, board: 40, quest: 15 };
+const arcItem = (x) => ({ title: str(x?.title), date: str(x?.date), status: str(x?.status) });
+export function tidy(mod, d) {
+    if (!d || typeof d !== 'object') return d;
+    const keep = ARC_KEEP[mod];
+    if (!keep) return d;
+    const key = { news: 'items', gossip: 'issues', board: 'posts', quest: 'list' }[mod];
+    const list = arr(d[key]);
+    let moved = [];
+    if (mod === 'quest') {
+        const ends = list.filter(q => q.status === 'done' || q.status === 'failed');
+        if (ends.length > keep) {
+            const drop = new Set(ends.slice(0, ends.length - keep));
+            moved = [...drop];
+            d[key] = list.filter(q => !drop.has(q));
+        }
+    } else if (list.length > keep) {
+        moved = list.slice(0, list.length - keep);
+        d[key] = list.slice(-keep);
+    }
+    d.archive = [...arr(d.archive).map(arcItem), ...moved.map(arcItem)].filter(x => x.title).slice(-200);
+    return d;
 }
 
 // AI에게 알려 주는 각 칸의 JSON 모양
@@ -338,7 +426,7 @@ export const SCHEMA = {
     profile: `{"mode":"minimal|detailed","list":[{"name":"이름","role":"user|main|npc","summary":"한두 줄 소개","fields":[{"k":"항목(나이/외모/성격/말투/능력/좋아하는 것/비밀 등)","v":"내용"}]}]}`,
     stats: `{"bars":[{"name":"체력","cur":100,"max":100,"color":"#e2524a","desc":"0이 되면…"}],"attrs":[{"name":"힘","val":2,"desc":"판정 보정치, 보통 -2~+5"}],"conds":[{"name":"상태 이상/버프 이름","desc":"효과"}]}`,
     dice: `{"system":"d20|d100","rules":"이 세계의 판정 규칙 몇 줄 (대성공/대실패의 의미 등)","quick":[{"name":"자주 쓰는 판정 이름(예: 은신)","attr":"보정에 쓸 능력치 이름","dc":12}]}`,
-    wallet: `{"currency":"화폐 단위","cash":1000,"items":[{"name":"소지품","qty":1,"desc":"설명"}]}`,
+    wallet: `{"currency":"화폐 단위","cash":1000,"items":[{"name":"소지품","qty":1,"desc":"설명","effect":"(쓰면 바뀌는 것, 예: 체력 +20 / 없으면 빈칸)"}],"prices":[{"name":"흔한 물건·서비스 (빵 한 개, 한 끼 식사, 여관 1박, 말 한 필, 한 달 월세 등)","price":10}],"jobs":[{"name":"{{user}}가 할 수 있는 일거리","pay":50,"effect":"일하면 바뀌는 것 (예: 기력 -20)"}],"regular":[{"name":"정기 수입·지출 (월급, 월세 등)","amount":-300,"every":"day|week|month"}],"fx":{"unit":"현실 화폐 (예: 원)","rate":0}}  (fx.rate = 이 화폐 1의 현실 가치, 모르면 0)`,
     shop: `{"shops":[{"name":"상점 이름","desc":"설명","place":"있는 장소","items":[{"name":"상품","price":100,"desc":"설명","kind":"item|deco (deco = 본거지에 놓는 가구·장식)","stock":-1}]}]}`,
     home: `{"name":"본거지 이름","desc":"설명","rooms":[{"name":"방/구역","desc":"지금 모습","decor":["놓여 있는 가구·장식 이름"]}],"storage":["창고에 있는 미배치 가구"]}`,
     rel: `{"user":[{"name":"캐릭터","label":"{{user}}와의 관계 이름","aff":0,"trust":0,"memo":"관계 메모"}],"pairs":[{"a":"캐릭터A","b":"캐릭터B","label":"관계","memo":"메모"}]}  (aff 호감, trust 신뢰: -100~100)`,
@@ -351,6 +439,7 @@ export const SCHEMA = {
     board: `{"name":"게시판 이름(길드 게시판·익명 커뮤니티·학교 게시판 등)","posts":[{"author":"닉네임","title":"글 제목","body":"본문","tag":"말머리","replies":[{"author":"닉네임","text":"댓글"}]}]}`,
     ach: `{"list":[{"name":"업적 이름","desc":"달성 조건","done":false,"hidden":false}]}`,
     memo: `{"list":[{"text":"메모 내용","by":"user|ai","inject":true,"pin":false}]}`,
+    fate: `{"curses":[{"name":"저주·축복 이름","kind":"curse|bless","desc":"설명","effects":["가격 +30%","호감 -50%","매일 체력 -5","대출 불가","(그 밖의 효과는 글로)"],"days":7,"cure":"해제 조건"}],"deck":[{"title":"이벤트 카드 이름","kind":"luck|bad|event","desc":"무슨 일이 일어나는지 1~2문장","effect":"바뀌는 상태 (예: cash: +200 / stat: 체력 -10 / item: +행운의 부적 — 여러 개면 ; 로)"}],"drawChance":20,"rules":[{"name":"규칙 이름","when":"돈 <= 0 (형식: 돈|게이지이름|호감:이름|신뢰:이름 + < <= > >= = + 숫자)","then":"그때 일어나는 상태 변화 (예: curse: 빈털터리 | 가격 +10% | 3일 | 돈을 모으면 풀림)"}]}  (drawChance = 하루가 지날 때 카드가 나올 확률 %)`,
 };
 
 // 직접 편집 화면 정의 — type: text | area | num | bool | select | tags | list | color
@@ -379,7 +468,10 @@ export const EDIT = {
     ],
     wallet: [
         { k: 'currency', label: '화폐 단위', type: 'text' }, { k: 'cash', label: '소지금', type: 'num' },
-        { k: 'items', label: '소지품', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'qty', label: '수량', type: 'num' }, { k: 'desc', label: '설명', type: 'text' }] },
+        { k: 'items', label: '소지품', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'qty', label: '수량', type: 'num' }, { k: 'desc', label: '설명', type: 'text' }, { k: 'effect', label: '사용 효과 (예: 체력 +20)', type: 'text' }] },
+        { k: 'prices', label: '물가표', type: 'list', title: 'name', fields: [{ k: 'name', label: '물건 · 서비스', type: 'text' }, { k: 'price', label: '가격', type: 'num' }] },
+        { k: 'jobs', label: '일거리', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'pay', label: '일당', type: 'num' }, { k: 'effect', label: '일하면 (예: 기력 -20)', type: 'text' }] },
+        { k: 'regular', label: '정기 수입 · 지출', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'amount', label: '금액 (지출은 -)', type: 'num' }, { k: 'every', label: '주기', type: 'select', options: [['day', '매일'], ['week', '매주'], ['month', '매달']] }] },
     ],
     shop: [
         { k: 'shops', label: '상점', type: 'list', title: 'name', fields: [
@@ -413,7 +505,7 @@ export const EDIT = {
     contact: [
         { k: 'mode', label: '연락 방식', type: 'select', options: [['phone', '휴대폰 메신저 (즉시)'], ['instant', '즉시 통신 (마법·무전 등)'], ['letter', '편지 (시간이 걸림)']] },
         { k: 'app', label: '연락 수단 이름', type: 'text' },
-        { k: 'contacts', label: '연락처', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'handle', label: '아이디 · 주소', type: 'text' }, { k: 'status', label: '상태 메시지', type: 'text' }, { k: 'courier', label: '이 사람이 쓰는 배달 수단 (편지)', type: 'text' }] },
+        { k: 'contacts', label: '연락처', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'handle', label: '아이디 · 주소', type: 'text' }, { k: 'status', label: '상태 메시지', type: 'text' }, { k: 'reflect', label: '본편 반영', type: 'select', options: [['', '기본 설정 따름'], ['always', '항상 반영'], ['pinned', '📌 고른 것만'], ['never', '반영 안 함 (비밀)']] }, { k: 'blocked', label: '차단', type: 'bool' }, { k: 'courier', label: '이 사람이 쓰는 배달 수단 (편지)', type: 'text' }] },
         { k: 'couriers', label: '배달 수단 (편지)', type: 'list', title: 'name', fields: [{ k: 'name', label: '이름', type: 'text' }, { k: 'icon', label: '이모지', type: 'text' }, { k: 'min', label: '최소 일수', type: 'num' }, { k: 'max', label: '최대 일수', type: 'num' }, { k: 'fee', label: '요금', type: 'num' }, { k: 'note', label: '설명', type: 'text' }] },
     ],
     quest: [
@@ -444,6 +536,20 @@ export const EDIT = {
     ],
     memo: [
         { k: 'list', label: '메모', type: 'list', title: 'text', fields: [{ k: 'text', label: '내용', type: 'area' }, { k: 'by', label: '작성', type: 'select', options: [['user', '나'], ['ai', 'AI']] }, { k: 'inject', label: 'AI 반영', type: 'bool' }, { k: 'pin', label: '고정', type: 'bool' }] },
+    ],
+    fate: [
+        { k: 'curses', label: '저주 · 축복', type: 'list', title: 'name', fields: [
+            { k: 'name', label: '이름', type: 'text' }, { k: 'kind', label: '종류', type: 'select', options: [['curse', '저주'], ['bless', '축복']] }, { k: 'desc', label: '설명', type: 'text' },
+            { k: 'effects', label: '효과 (쉼표 · 예: 가격 +30%, 호감 -50%, 매일 체력 -5, 대출 불가)', type: 'tags' }, { k: 'days', label: '남은 기간 (일, 비우면 계속)', type: 'num' }, { k: 'cure', label: '해제 조건', type: 'text' },
+        ] },
+        { k: 'drawChance', label: '하루가 지날 때 카드가 나올 확률 %', type: 'num' },
+        { k: 'deck', label: '이벤트 카드', type: 'list', title: 'title', fields: [
+            { k: 'title', label: '이름', type: 'text' }, { k: 'kind', label: '종류', type: 'select', options: [['luck', '행운'], ['bad', '불운'], ['event', '사건']] },
+            { k: 'desc', label: '내용', type: 'area' }, { k: 'effect', label: '바뀌는 상태 (예: cash: +200 ; stat: 체력 -10)', type: 'text' },
+        ] },
+        { k: 'rules', label: '자동 규칙', type: 'list', title: 'name', fields: [
+            { k: 'name', label: '이름', type: 'text' }, { k: 'when', label: '조건 (예: 돈 <= 0 / 체력 < 20 / 호감:레온 >= 80)', type: 'text' }, { k: 'then', label: '그러면 (상태 줄 · 여러 개면 ;)', type: 'area' },
+        ] },
     ],
 };
 

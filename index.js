@@ -1,10 +1,10 @@
 // 상태창 시뮬 (StatusSim) v2 — SillyTavern UI extension
 // 어떤 카드·세계관에도 붙는 범용 상태창. 모든 칸은 AI가 처음 채우고, 직접 편집 · 추가 지시 · 다시 생성이 된다.
 import { app, ctx, settings, saveSettings, getMeta, saveMeta, isActive, ready, modOn, MODS, MOD_IDS, MOD, esc, short, splitBar, findBy, TITLE, LOG, VERSION, MODULE, sub, rand, DIFFS } from './src/core.js';
-import { compute, buildInjection, setInjection, addAdjust, KEYMAP, unreadCount } from './src/engine.js';
+import { compute, buildInjection, setInjection, addAdjust, KEYMAP, unreadCount, stashStatus, stashAllSwipes, drawerOps, setDrawer, extractOps } from './src/engine.js';
 import { analyzeMessage, instructModule } from './src/ai.js';
 import { listProfiles } from './src/prompts.js';
-import { diffHTML, confirmPopup, applyTheme } from './src/kit.js';
+import { diffHTML, confirmPopup, applyTheme, askInput } from './src/kit.js';
 import { ensureUI, rerenderPanels, openSheet, openWizard, openRoll, openPromptWindow, openThemeWindow, panels, renderHud } from './src/shell.js';
 import { receivePing } from './src/contact.js';
 import { translateSheet } from './src/translate.js';
@@ -20,15 +20,32 @@ function decorateAll() {
         const textEl = mesEl.querySelector('.mes_text');
         if (!textEl || Number.isNaN(i)) return;
         const snap = app.current.snaps.get(i);
+        const m = ctx().chat?.[i];
+        const hasCard = snap && set.msgCard !== 'off' && (snap.labels.length || snap.roll);
+        if (hasCard && !textEl.querySelector('.ss-slot, .custom-ss-slot')) { const sl = document.createElement('div'); sl.className = 'ss-slot'; textEl.appendChild(sl); }
+        const editBtn = m && drawerOps(m) && !/<status>/i.test(m.mes ?? '') ? `<button class="ss-mchip edit" data-ss-edit="${i}" title="이 답의 상태 변화 고치기"><i class="fa-solid fa-pen"></i></button>` : '';
         textEl.querySelectorAll('.ss-slot, .custom-ss-slot').forEach((slot, k) => {
             if (k > 0 || !snap || set.msgCard === 'off' || (!snap.labels.length && !snap.roll)) { slot.innerHTML = ''; slot.style.display = 'none'; return; }
             slot.style.display = '';
             const rollBtn = snap.roll && i === app.current.lastAI ? `<button class="ss-mchip roll" data-roll="${esc(snap.roll.label)}|${snap.roll.dc}"><i class="fa-solid fa-dice-d20"></i> ${esc(snap.roll.label)} 굴리기</button>` : '';
-            slot.innerHTML = `<div class="ss-msgcard ss-scope">${snap.labels.filter(l => !l.startsWith('🎲')).slice(0, 14).map(l => `<span class="ss-mchip ${/[−-]\d/.test(l) ? 'neg' : /\+\d/.test(l) ? 'pos' : ''}">${esc(l)}</span>`).join('')}${rollBtn}</div>`;
+            slot.innerHTML = `<div class="ss-msgcard ss-scope">${snap.labels.filter(l => !l.startsWith('🎲')).slice(0, 14).map(l => `<span class="ss-mchip ${/[−-]\d/.test(l) ? 'neg' : /\+\d/.test(l) ? 'pos' : ''}">${esc(l)}</span>`).join('')}${rollBtn}${editBtn}</div>`;
         });
     });
 }
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
+    const eb = e.target.closest('.ss-mchip.edit');
+    if (eb) {
+        const i = Number(eb.dataset.ssEdit);
+        const m = ctx().chat?.[i];
+        if (!m) return;
+        const cur = (drawerOps(m) ?? []).map(([k, v]) => `${k}: ${v}`).join('\n');
+        const v = await ctx().Popup.show.input(TITLE, '이 답에서 바뀐 상태 (한 줄에 하나, key: 값). 비우면 변화 없음.', cur, { rows: 8 });
+        if (v === null || v === false || v === undefined) return;
+        setDrawer(m, extractOps(`<status>\n${v}\n</status>`));
+        await ctx().saveChat?.();
+        refreshNow();
+        return;
+    }
     const b = e.target.closest('.ss-mchip.roll');
     if (!b) return;
     const [label, dc] = splitBar(b.dataset.roll);
@@ -95,6 +112,9 @@ app.refreshNow = refreshNow;
 function profileOptions(sel) {
     return `<option value="">메인 연결 그대로</option>${listProfiles().map(p => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}`;
 }
+function featOptions(sel) {
+    return profileOptions(sel).replace('메인 연결 그대로', '확장 AI 모델 그대로');
+}
 function renderSettings() {
     if (document.getElementById('ss-settings')) return;
     const s = settings();
@@ -119,7 +139,11 @@ function renderSettings() {
                 ${o('sync', 'tagPlus', 'A+B. 태그 + 빠졌을 때만 별도 분석')}
                 ${o('sync', 'analyze', 'B. 별도 분석 — 매 응답 뒤 AI 1회 더 (정확 · 비용↑)')}
                 ${o('sync', 'off', 'C. 끔 — 직접 편집·추가 지시로만')}</select></label>
-            <label>규칙 주입<select class="text_pole" data-s="injectMode">${o('injectMode', 'full', '전체 (세계 요약·예시 포함)')}${o('injectMode', 'lite', '간결 (토큰 절약)')}</select></label>
+            <label>규칙 주입<select class="text_pole" data-s="injectMode">${o('injectMode', 'full', '전체 (세계 요약·예시 포함)')}${o('injectMode', 'lite', '간결 (토큰 절약)')}${o('injectMode', 'ultra', '초압축 (기호·키워드 · 토큰 최소)')}</select>
+                <small>초압축은 가벼운 모델이 &lt;status&gt;를 빼먹을 수 있어서, 자동 반영을 A+B로 두는 걸 추천해요.</small></label>
+            <label class="checkbox_label"><input type="checkbox" data-s="sceneFilter" ${s.sceneFilter ? 'checked' : ''}> 장면 필터 — 최근 대화에 나온 인물만 자세히, 나머지는 이름·수치만</label>
+            <label>장면 판단에 볼 최근 메시지 수<input type="number" min="1" max="40" class="text_pole" data-s="sceneTurns" value="${s.sceneTurns}"></label>
+            <label>주입할 고정 메모 최대 개수<input type="number" min="0" max="30" class="text_pole" data-s="pinCap" value="${s.pinCap}"></label>
             <label>메시지 변동 칩<select class="text_pole" data-s="msgCard">${o('msgCard', 'compact', '보이기')}${o('msgCard', 'off', '숨기기')}</select></label>
             <b class="ss-set-h">상태창 언어 · 번역</b>
             <small>상태창 칸(프로필·상점·편지·뉴스…)을 만드는 <b>확장 AI 모델</b>과, 그걸 번역하는 <b>번역 모델</b>을 따로 고를 수 있어요. 롤플 본문과는 상관없어요.</small>
@@ -132,7 +156,7 @@ function renderSettings() {
             <label class="checkbox_label"><input type="checkbox" data-s="skipQuiet" ${s.skipQuiet ? 'checked' : ''}> 조용한 생성·퀵리플라이(/gen 등)엔 안 보냄</label>
             <small>퀵리플라이에서는 <code>/ss-pause</code> · <code>/ss-resume</code> · <code>/ss-skip</code> (다음 1번만)</small>
             <b class="ss-set-h">연락</b>
-            <label class="checkbox_label"><input type="checkbox" data-s="contactInject" ${s.contactInject ? 'checked' : ''}> 최근 연락 내용을 본편 AI에게 알려 주기</label>
+            <label>연락 내용을 본편 AI에게<select class="text_pole" data-s="contactReflect">${o('contactReflect', 'auto', '자동 — 장면에 있는 사람·최근 연락 순으로 최근 3줄')}${o('contactReflect', 'pinned', '📌 고른 것만 — 말풍선에서 고정한 메시지만')}${o('contactReflect', 'summary', '요약 — 대화가 쌓이면 한 줄 요약 (가끔 AI 1회)')}${o('contactReflect', 'off', '끔 — 알려 주지 않음')}</select><small>연락처마다 ⋮ 메뉴에서 「항상 · 고른 것만 · 숨기기」를 따로 정할 수 있어요.</small></label>
             <label class="checkbox_label"><input type="checkbox" data-s="autoPing" ${s.autoPing ? 'checked' : ''}> 자동 선톡 (가끔 누군가 먼저 연락 · 확장 AI 1회)</label>
             <label>자동 선톡 간격 (AI 응답 수)<input type="number" min="2" max="100" class="text_pole" data-s="autoPingEvery" value="${s.autoPingEvery}"></label>
             <label>상대가 웃돈 주고 급행으로 답장할 확률 % (호감이 높을수록 ↑)<input type="number" min="0" max="100" class="text_pole" data-s="rushChance" value="${s.rushChance}"></label>
@@ -140,11 +164,24 @@ function renderSettings() {
             <label>확장 AI에 쓸 모델 (연결 프로필)
                 <div class="ss-set-inline"><select class="text_pole" data-s="aiProfile">${profileOptions(s.aiProfile)}</select><button class="menu_button" data-s-act="profiles" title="새로고침"><i class="fa-solid fa-rotate"></i></button></div>
                 <small>만들기·추가 지시·연락 답장·뉴스 등에만 쓰여요. 롤플 본문은 메인 연결.</small></label>
+            <details class="ss-set-more"><summary>기능별 모델 따로 고르기</summary>
+                <small>비워 두면 위의 확장 AI 모델을 써요.</small>
+                <label>연락 (메신저·편지 답장 · 선톡)<select class="text_pole" data-s="profContact">${featOptions(s.profContact)}</select></label>
+                <label>만들기 · 추가 지시 · 다시 생성<select class="text_pole" data-s="profGen">${featOptions(s.profGen)}</select></label>
+                <label>소식 (뉴스 · 가십 · 게시판 · 의뢰)<select class="text_pole" data-s="profFeeds">${featOptions(s.profFeeds)}</select></label>
+                <label>별도 분석 (자동 반영 B · A+B)<select class="text_pole" data-s="profAnalyze">${featOptions(s.profAnalyze)}</select></label>
+            </details>
+            <label class="checkbox_label"><input type="checkbox" data-s="aiFallbackMain" ${s.aiFallbackMain ? 'checked' : ''}> 연결 프로필이 실패하면 메인 연결로 다시 보내기 <small>(끄면 실패로 끝나요 · 비싼 메인 모델로 새는 것 방지)</small></label>
+            <label class="checkbox_label"><input type="checkbox" data-s="genBatch" ${s.genBatch ? 'checked' : ''}> 상태창 만들기: 관련 칸끼리 묶어서 생성 <small>(호출 17번 → 6번 · 빠진 칸만 따로 다시)</small></label>
+            <label>동시에 보낼 생성 요청 수 <small>(너무 높으면 API가 거절할 수 있어요)</small><input type="number" min="1" max="8" class="text_pole" data-s="genParallel" value="${s.genParallel}"></label>
             <label>확장 AI 최대 출력 토큰<input type="number" min="500" max="32000" class="text_pole" data-s="aiMaxTokens" value="${s.aiMaxTokens}"></label>
             <label>생성 때 읽을 최근 채팅 수<input type="number" min="0" max="100" class="text_pole" data-s="recentForGen" value="${s.recentForGen}"></label>
             <label>생성 때 읽을 로어북 최대 글자 수<input type="number" min="0" max="100000" step="1000" class="text_pole" data-s="loreChars" value="${s.loreChars}"></label>
             <label>상태 주입 깊이 (0 = 맨 끝)<input type="number" min="0" max="20" class="text_pole" data-s="injectDepth" value="${s.injectDepth}"></label>
             <label class="checkbox_label"><input type="checkbox" data-s="autoRegex" ${s.autoRegex ? 'checked' : ''}> &lt;status&gt; 숨김 정규식 자동 설치</label>
+            <b class="ss-set-h">다른 확장과 같이 쓰기</b>
+            <label class="checkbox_label"><input type="checkbox" data-s="stashTags" ${s.stashTags ? 'checked' : ''}> &lt;status&gt;를 읽은 뒤 본문에서 떼어 보관 <small>(추천 · 요약·번역·로그 복사 확장에 변화량 줄이 안 보여요. 고칠 땐 변동 칩의 ✏️)</small></label>
+            <div class="ss-set-btns"><button class="menu_button" data-s-act="stashall"><i class="fa-solid fa-box-archive"></i> 이 채팅의 옛 태그도 모두 보관</button></div>
             <div class="ss-set-btns">
                 <button class="menu_button" data-s-act="defmods">지금 기능 구성을 새 채팅 기본값으로</button>
                 <button class="menu_button" data-s-act="regex">정규식 설치</button>
@@ -167,11 +204,20 @@ function renderSettings() {
         if (a === 'prompts') openPromptWindow();
         if (a === 'theme') openThemeWindow();
         if (a === 'chaton') { const m = getMeta(true); m.off = false; await saveMeta(); refreshNow(); toastr.success('이 채팅에서 켰어요.', TITLE); }
-        if (a === 'profiles') { el.querySelector('[data-s="trProfile"]').innerHTML = profileOptions(settings().trProfile).replace('메인 연결 그대로', '확장 AI 모델 그대로 (없으면 메인)'); el.querySelector('[data-s="aiProfile"]').innerHTML = profileOptions(settings().aiProfile); toastr.info(`연결 프로필 ${listProfiles().length}개`, TITLE); }
+        if (a === 'profiles') { el.querySelector('[data-s="trProfile"]').innerHTML = profileOptions(settings().trProfile).replace('메인 연결 그대로', '확장 AI 모델 그대로 (없으면 메인)'); el.querySelector('[data-s="aiProfile"]').innerHTML = profileOptions(settings().aiProfile); for (const k of ['profContact', 'profGen', 'profFeeds', 'profAnalyze']) el.querySelector(`[data-s="${k}"]`).innerHTML = featOptions(settings()[k]); toastr.info(`연결 프로필 ${listProfiles().length}개`, TITLE); }
         if (a === 'defmods') { const m = getMeta(); if (!m) return; settings().defaultMods = { ...m.mods }; saveSettings(); toastr.success('저장했어요.', TITLE); }
         if (a === 'regex') installRegex() ? toastr.success('설치했어요.', TITLE) : toastr.info('이미 설치되어 있어요.', TITLE);
         if (a === 'unregex') { removeRegex(); toastr.info('제거했어요.', TITLE); }
         if (a === 'trsheet') translateSheet(e.target.closest('button'));
+        if (a === 'stashall') {
+            const chat = ctx().chat ?? [];
+            let n = 0;
+            for (const m of chat) n += stashAllSwipes(m);
+            if (!n) { toastr.info('옮길 태그가 없어요.', TITLE); return; }
+            await ctx().saveChat?.();
+            await ctx().reloadCurrentChat?.();
+            toastr.success(`답 ${n}개의 태그를 보관했어요.`, TITLE);
+        }
     });
     document.getElementById('extensions_settings2')?.appendChild(el);
 }
@@ -249,8 +295,9 @@ async function onBeforeGenerate(type, _opts, dryRun) {
     if (dryRun || !isActive() || !ready()) return;
     const set = settings(), meta = getMeta();
     let skip = !!meta.paused;
-    if (!skip && meta.skipOnce) { skip = true; meta.skipOnce = false; saveMeta(); renderHud(); }
     if (!skip && set.skipQuiet && type === 'quiet') skip = true;
+    // 조용한 생성(다른 확장의 요약 등)은 '다음 1번 건너뛰기'를 쓰지 않는다
+    if (!skip && meta.skipOnce && type !== 'quiet') { skip = true; meta.skipOnce = false; saveMeta(); renderHud(); }
     if (!skip && set.oocDetect && type !== 'quiet' && type !== 'continue') {
         try { if (new RegExp(set.oocPattern, 'i').test(lastUserText())) skip = true; } catch { /* bad pattern */ }
     }
@@ -262,6 +309,23 @@ async function onBeforeGenerate(type, _opts, dryRun) {
     try { setInjection(buildInjection(compute(limit))); } catch (e) { console.error(LOG, e); }
 }
 function onGenEnded() { refresh(); }
+// 서랍: AI 답이 끝나면 <status>를 본문에서 떼어 보관
+let stashSave = null;
+function stashAt(id, { replace = false, rerender = true, save = false } = {}) {
+    if (!settings().stashTags || !isActive() || !ready()) return; // 상태창을 안 만든 채팅의 <status>(다른 프리셋 것일 수도)는 건드리지 않는다
+    const chat = ctx().chat ?? [];
+    const i = Number(id ?? chat.length - 1);
+    const m = chat[i];
+    if (!stashStatus(m, { replace })) return;
+    if (rerender) { try { ctx().updateMessageBlock?.(i, m); } catch (e) { console.warn(LOG, 'rerender', e); } }
+    if (save) { clearTimeout(stashSave); stashSave = setTimeout(() => ctx().saveChat?.(), 400); }
+}
+function onReceived(id, type) {
+    if (type === 'impersonate') return;
+    stashAt(id, { replace: type !== 'continue' });
+}
+function onSwiped(id) { stashAt(id, { replace: true, save: true }); refresh(); }
+function onEdited(id) { stashAt(id, { replace: true, rerender: false, save: true }); refresh(); }
 const analyzed = new Set();
 let pingCounter = 0;
 function onCharRendered(id, type) {
@@ -278,8 +342,8 @@ function onCharRendered(id, type) {
         pingCounter++;
         if (pingCounter >= Math.max(2, set.autoPingEvery) && rand(100) <= 50) {
             pingCounter = 0;
-            const cs = app.current.state.data.contact.contacts;
-            receivePing(cs[rand(cs.length) - 1].name, true).catch(e => console.warn(LOG, 'autoping', e));
+            const cs = app.current.state.data.contact.contacts.filter(c => !c.blocked);
+            if (cs.length) receivePing(cs[rand(cs.length) - 1].name, true).catch(e => console.warn(LOG, 'autoping', e));
         }
     }
     if (set.sync !== 'analyze' && set.sync !== 'tagPlus') return;
@@ -307,8 +371,11 @@ function init() {
     const on = (name, fn) => { if (E[name]) eventSource.on(E[name], fn); };
     on('CHAT_CHANGED', onChatChanged);
     on('GENERATION_AFTER_COMMANDS', onBeforeGenerate);
+    on('MESSAGE_RECEIVED', onReceived);
     on('CHARACTER_MESSAGE_RENDERED', onCharRendered);
-    for (const ev of ['USER_MESSAGE_RENDERED', 'MESSAGE_EDITED', 'MESSAGE_UPDATED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MORE_MESSAGES_LOADED', 'GENERATION_STOPPED']) on(ev, refresh);
+    on('MESSAGE_SWIPED', onSwiped);
+    on('MESSAGE_EDITED', onEdited);
+    for (const ev of ['USER_MESSAGE_RENDERED', 'MESSAGE_UPDATED', 'MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'GENERATION_STOPPED']) on(ev, refresh);
     on('GENERATION_ENDED', onGenEnded);
     refreshNow();
     console.log(LOG, 'loaded', VERSION);

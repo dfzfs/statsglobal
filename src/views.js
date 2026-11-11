@@ -3,7 +3,9 @@ import {
     app, ctx, settings, getMeta, saveMeta, modOn, MODS, MOD, MOD_IDS, DIFFS, diffOf, esc, short, clamp, norm, findBy, fmtNum, clone, splitBar, parseNum,
     dateStr, dateShort, dayIndex, eventsOn, nextTime, upcoming, userName, TITLE, VERSION, EMPTY, CONTACT_MODES, stamp,
 } from './core.js';
-import { addAdjust, commit, unreadCount, dueLetters, inTransit } from './engine.js';
+import { addAdjust, commit, unreadCount, dueLetters, inTransit, priceMul } from './engine.js';
+import { walletView } from './money.js';
+import { fateView } from './fate.js';
 import { gauge, meter, sec, emptyBox, chip, avatar, ai1, seg, insertInput, closeIfPopup, askInput, askConfirm } from './kit.js';
 import { diceView } from './dice.js';
 import { contactView } from './contact.js';
@@ -22,12 +24,13 @@ export const MINI = {
     rel: { name: '관계 TOP 3', on: (d) => d.rel?.user.length, html: (s) => `<div class="ss-mini-rel">${[...s.data.rel.user].sort((a, b) => b.aff - a.aff).slice(0, 3).map(r => `<div>${avatar(r.name, 'xs')}<span>${esc(r.name)}</span><b class="${r.aff < 0 ? 'neg' : 'love'}">♥ ${r.aff}</b></div>`).join('')}</div>`, tab: 'rel' },
     cond: { name: '상태 이상', on: (d) => d.stats?.conds.length, html: (s) => `<div class="ss-chips">${s.data.stats.conds.slice(0, 5).map(c => chip(esc(c.name), 'warn')).join('')}</div>`, tab: 'stats' },
     news: { name: '최신 뉴스', on: (d) => d.news?.items.length, html: (s) => `<div class="ss-mini-line"><i class="fa-solid fa-newspaper"></i><span>${esc(short(s.data.news.items.at(-1).title, 34))}</span></div>`, tab: 'news' },
+    fate: { name: '저주 · 빚', on: (d) => d.fate?.curses.length || d.wallet?.loans.some(l => l.status === 'open' || l.status === 'late'), html: (s) => { const cs = s.data.fate?.curses ?? []; const debt = (s.data.wallet?.loans ?? []).filter(l => l.status === 'open' || l.status === 'late'); return `<div class="ss-mini-line ${debt.some(l => l.status === 'late') ? 'alert' : ''}"><i class="fa-solid fa-hat-wizard"></i><span>${cs.map(c => esc(c.name)).join(', ')}${cs.length && debt.length ? ' · ' : ''}${debt.length ? `빚 ${fmtNum(debt.reduce((a, l) => a + l.owed, 0))}${debt.some(l => l.status === 'late') ? ' (연체)' : ''}` : ''}</span></div>`; }, tab: 'fate' },
     diff: { name: '난이도', on: () => true, html: () => { const d = DIFFS[diffOf()]; return `<div class="ss-mini-line"><i class="fa-solid ${d.icon}"></i><span>${d.name}</span></div>`; }, tab: 'manage' },
 };
 export function miniWidgets(s, keys, clickable = true) {
     const meta = getMeta();
     const d = s.data;
-    const modFor = { bars: 'stats', date: 'calendar', loc: 'map', cash: 'wallet', contact: 'contact', quest: 'quest', rel: 'rel', cond: 'stats', news: 'news' };
+    const modFor = { bars: 'stats', date: 'calendar', loc: 'map', cash: 'wallet', contact: 'contact', quest: 'quest', rel: 'rel', cond: 'stats', news: 'news', fate: 'fate' };
     return keys.filter(k => MINI[k] && (!modFor[k] || modOn(modFor[k], meta)) && MINI[k].on(d)).map(k => `<div class="ss-mini-w" ${clickable ? `data-act="tab" data-arg="${MINI[k].tab}"` : ''}>${MINI[k].html(s)}</div>`).join('');
 }
 
@@ -41,7 +44,7 @@ function homeView(s, ui) {
     if (un.length && modOn('contact')) alerts.push(`<div class="ss-callout" data-act="tab" data-arg="contact"><i class="fa-solid fa-comment-dots"></i><div><b>새 연락</b><span>${un.map(([w, n]) => `${esc(w)} ${n}`).join(', ')}</span></div></div>`);
     if (s.pendingRoll && modOn('dice')) alerts.push(`<div class="ss-callout warn" data-act="tab" data-arg="dice"><i class="fa-solid fa-dice-d20"></i><div><b>판정 요청</b><span>${esc(s.pendingRoll.label)}</span></div></div>`);
     if (meta.paused) alerts.push(`<div class="ss-callout pause"><i class="fa-solid fa-pause"></i><div><b>일시정지 중</b><span>AI에게 상태를 보내지 않아요</span></div><button class="ss-btn sm pri" data-act="pause">재개</button></div>`);
-    const order = ['bars', 'date', 'loc', 'cash', 'cond', 'quest', 'rel', 'news'];
+    const order = ['bars', 'date', 'loc', 'cash', 'fate', 'cond', 'quest', 'rel', 'news'];
     return `<div class="ss-home">
         <div class="ss-hero"><div class="ss-hero-t"><small>${esc(c.genre || '세계')}${c.canon ? ` · ${esc(c.canon)}` : ''}</small><b>${esc(c.title || '이름 없는 세계')}</b></div>
             ${c.userRole ? `<p><b>${esc(userName())}</b> — ${esc(c.userRole)}</p>` : ''}
@@ -67,17 +70,17 @@ export const VIEW = {
         ${sec('능력치', `<div class="ss-attrs">${d.attrs.map(a => `<div class="ss-attr" title="${esc(a.desc)}"><span>${esc(a.name)}</span><b>${a.val >= 0 ? '+' : ''}${a.val}</b></div>`).join('') || emptyBox('능력치가 없어요')}</div>`)}
         ${sec('상태 이상 · 버프', `<div class="ss-chips">${d.conds.map(c => `<span class="ss-chip warn" title="${esc(c.desc)}">${esc(c.name)}<button class="ss-x" data-act="uncond" data-arg="${esc(c.name)}">×</button></span>`).join('') || '<span class="ss-hint">없음</span>'}</div>`)}`,
     dice: diceView,
-    wallet: (s, d) => `<div class="ss-cashbox"><i class="fa-solid fa-coins"></i><div><small>소지금</small><b>${fmtNum(d.cash)} <span>${esc(d.currency)}</span></b></div><button class="ss-btn sm" data-act="cashedit"><i class="fa-solid fa-pen"></i> 수정</button></div>
-        ${sec(`소지품 <small>${d.items.length}</small>`, `<div class="ss-stack">${d.items.map(i => `<div class="ss-item"><div class="ss-item-b"><b>${esc(i.name)}${i.qty > 1 ? ` <em>×${i.qty}</em>` : ''}</b>${i.desc ? `<small>${esc(i.desc)}</small>` : ''}</div>
-            <div class="ss-item-a"><button class="ss-btn sm" data-act="use" data-arg="${esc(i.name)}">사용</button>${sellPrice(s, i.name) ? `<button class="ss-btn sm ghost" data-act="sell" data-arg="${esc(i.name)}">판매 ${fmtNum(sellPrice(s, i.name))}</button>` : ''}<button class="ss-ib" data-act="dec" data-arg="${esc(i.name)}" title="하나 버리기"><i class="fa-solid fa-minus"></i></button></div></div>`).join('') || emptyBox('소지품이 없어요', 'fa-box-open')}</div>`)}`,
+    wallet: walletView,
+    fate: fateView,
     shop: (s, d, ui) => {
         const w = s.data.wallet;
+        const mul = priceMul(s), pr = (it) => Math.round(it.price * mul);
         const i0 = clamp(ui.shop ?? 0, 0, Math.max(0, d.shops.length - 1));
         const sh = d.shops[i0];
         return `${d.shops.length > 1 ? seg(d.shops.map((x, i) => [i, esc(x.name)]), i0, 'shoptab', 'class="ss-seg wrap"') : ''}
         ${sh ? `<div class="ss-shop-h"><div><b>${esc(sh.name)}</b><small>${esc(sh.desc)}${sh.place ? ` · 📍 ${esc(sh.place)}` : ''}</small></div>${w ? `<span class="ss-chip"><i class="fa-solid fa-coins"></i> ${fmtNum(w.cash)} ${esc(w.currency)}</span>` : ''}</div>
         <div class="ss-goods">${sh.items.map((it, j) => `<div class="ss-good ${it.stock === 0 ? 'out' : ''}"><div class="ss-good-b"><b>${esc(it.name)}</b>${it.kind === 'deco' ? chip('가구') : ''}${it.stock === 0 ? chip('품절', 'neg') : it.stock > 0 ? `<small>재고 ${it.stock}</small>` : ''}<small>${esc(it.desc)}</small></div>
-            <div class="ss-good-a"><b class="ss-price">${fmtNum(it.price)}</b><button class="ss-btn sm pri" data-act="buy" data-arg="${i0}|${j}" ${it.stock === 0 || (w && w.cash < it.price) ? 'disabled' : ''}>구매</button></div></div>`).join('') || emptyBox('상품이 없어요')}</div>` : emptyBox('상점이 없어요. ✨ AI로 수정에서 "○○ 상점 추가"라고 해 보세요.', 'fa-store')}`;
+            <div class="ss-good-a"><b class="ss-price ${mul > 1 ? 'up' : mul < 1 ? 'down' : ''}">${fmtNum(pr(it))}</b><button class="ss-btn sm pri" data-act="buy" data-arg="${i0}|${j}" ${it.stock === 0 || (w && w.cash < pr(it)) ? 'disabled' : ''}>구매</button></div></div>`).join('') || emptyBox('상품이 없어요')}</div>` : emptyBox('상점이 없어요. ✨ AI로 수정에서 "○○ 상점 추가"라고 해 보세요.', 'fa-store')}`;
     },
     rel: (s, d) => `<div class="ss-stack">${d.user.map(r => `<div class="ss-card ss-relc"><div class="ss-relc-h">${avatar(r.name)}<div class="ss-ct-b"><b>${esc(r.name)}</b>${r.label ? `<small>${esc(r.label)}</small>` : ''}</div>${modOn('contact') ? `<button class="ss-ib" data-act="talk" data-arg="${esc(r.name)}" title="연락"><i class="fa-solid fa-envelope"></i></button>` : ''}</div>
             ${meter('호감', r.aff, 'love')}${meter('신뢰', r.trust, 'trust')}${r.memo ? `<p class="ss-dim ss-pre">${esc(r.memo)}</p>` : ''}</div>`).join('') || emptyBox('관계가 없어요', 'fa-people-arrows')}</div>
@@ -178,6 +181,7 @@ export function layoutPlaces(places) {
     });
     return pos;
 }
+app.sellPrice = (s, name) => sellPrice(s, name);
 export function sellPrice(s, name) {
     if (!modOn('shop') || !s.data.shop) return 0;
     for (const sh of s.data.shop.shops) { const it = findBy(sh.items, name); if (it && norm(it.name) === norm(name)) return Math.floor(it.price / 2); }
@@ -187,7 +191,7 @@ export function sellPrice(s, name) {
 // ───── 관리 ─────
 export const GROUPS = [
     { id: 'home', name: '홈', icon: 'fa-house', tabs: ['home'] },
-    { id: 'me', name: '나', icon: 'fa-user', tabs: ['profile', 'stats', 'dice', 'wallet', 'ach', 'memo'] },
+    { id: 'me', name: '나', icon: 'fa-user', tabs: ['profile', 'stats', 'dice', 'wallet', 'fate', 'ach', 'memo'] },
     { id: 'world', name: '세계', icon: 'fa-earth-asia', tabs: ['map', 'calendar', 'shop', 'base'] },
     { id: 'people', name: '사람', icon: 'fa-user-group', tabs: ['rel', 'contact'] },
     { id: 'feed', name: '소식', icon: 'fa-bullhorn', tabs: ['quest', 'news', 'gossip', 'board'] },
@@ -236,11 +240,12 @@ export const VIEW_ACTIONS = {
         const [i, j] = arg.split('|').map(Number);
         const sh = s.data.shop.shops[i], it = sh?.items[j]; if (!it) return;
         const w = s.data.wallet;
-        if (w && w.cash < it.price) { toastr.warning('돈이 모자라요.', TITLE); return; }
-        const ops = [['cash', `-${it.price}`]];
+        const price = Math.round(it.price * priceMul(s));
+        if (w && w.cash < price) { toastr.warning('돈이 모자라요.', TITLE); return; }
+        const ops = [['cash', `-${price}`]];
         if (it.kind === 'deco' && modOn('home')) ops.push(['decor', `+${it.name}`]); else ops.push(['item', `+${it.name} 1${it.desc ? ` | ${it.desc}` : ''}`]);
         if (it.stock > 0) { const nd = clone(s.data.shop); nd.shops[i].items[j].stock--; await addAdjust({ set: { mod: 'shop', data: nd }, silent: true }); }
-        await addAdjust({ ops, label: `${sh.name}에서 ${it.name} 구매 (−${fmtNum(it.price)} ${w?.currency ?? ''})` });
+        await addAdjust({ ops, label: `${sh.name}에서 ${it.name} 구매 (−${fmtNum(price)} ${w?.currency ?? ''})` });
         toastr.success(`${esc(it.name)} 구매!`, TITLE);
     },
     unplace: (el, arg) => addAdjust({ ops: [['_unplace', arg]], label: `${arg}을(를) 창고로` }),

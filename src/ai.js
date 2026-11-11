@@ -1,5 +1,5 @@
 // 확장 AI가 하는 일 (모두 토큰이 드는 호출)
-import { app, ctx, settings, getMeta, MOD, NORM, normalize, short, findBy, norm, dateStr, stamp, MODULE, LOG, DIFFS, diffOf, CONTACT_MODES, uid } from './core.js';
+import { app, ctx, settings, getMeta, MOD, NORM, normalize, short, findBy, norm, dateStr, stamp, MODULE, LOG, DIFFS, diffOf, CONTACT_MODES, uid, msgText, fmtNum } from './core.js';
 import { P, aiGenerate, parseJSON } from './prompts.js';
 import { SCHEMA } from './core.js';
 import { compute, buildInjection, tagKeysFor, extractOps, stripStatus, recentChat, chatCharacters } from './engine.js';
@@ -23,6 +23,39 @@ export async function genModule(mod, { sources, core, instruction, profileMode, 
     return mod === 'core' ? NORM.core(obj) : normalize(mod, obj);
 }
 
+// 묶음 생성: 관련 칸 여러 개를 한 번에 (재료를 한 번만 보내서 입력 토큰↓, 칸끼리 일관성↑)
+// 빠지거나 깨진 칸은 결과에서 빠지고, 부르는 쪽이 그 칸만 따로 다시 받는다.
+export const GEN_GROUPS = [
+    ['profile', 'rel', 'contact'],
+    ['wallet', 'shop', 'home'],
+    ['map', 'calendar', 'quest'],
+    ['stats', 'dice', 'ach', 'memo', 'fate'],
+    ['news', 'gossip', 'board'],
+];
+export async function genGroup(mods, { sources, core, instruction, profileMode, contactMode, feature = 'wizard' }) {
+    if (mods.length === 1) return { [mods[0]]: await genModule(mods[0], { sources, core, instruction, profileMode, contactMode, feature }) };
+    const L = [];
+    if (sources) L.push(`=== SOURCES ===\n${sources}`);
+    L.push(`=== WORLD CORE (already decided) ===\n${JSON.stringify(core)}`);
+    if (instruction) L.push(`=== USER'S DIRECTION (highest priority) ===\n${instruction}`);
+    L.push(`=== TASK ===\n${P('gen.batch', { n: mods.length })}`);
+    for (const mod of mods) {
+        L.push(`--- PANEL "${mod}" (${MOD[mod].name}) ---\n${P(`gen.${mod}`, { difficulty: diffLine(), contactMode: contactModeLine(contactMode) })}${mod === 'profile' ? `\nMODE: ${profileMode ?? 'minimal'}` : ''}\nJSON shape: ${SCHEMA[mod]}`);
+    }
+    L.push(`=== OUTPUT ===\nONE JSON object with exactly these keys: {${mods.map(m => `"${m}": {…}`).join(', ')}}`);
+    const max = Math.min(Math.max(Number(settings().aiMaxTokens) || 6000, 2500 * mods.length), 24000);
+    const obj = await finJSON(parseJSON(await aiGenerate(feature, P('gen.system'), L.join('\n\n'), max)), core);
+    const out = {};
+    for (const mod of mods) {
+        const d = obj?.[mod];
+        if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
+        if (mod === 'profile' && profileMode) d.mode = profileMode;
+        if (mod === 'contact' && contactMode && contactMode !== 'auto') d.mode = contactMode;
+        try { out[mod] = normalize(mod, d); } catch (e) { console.warn(LOG, 'group normalize', mod, e); }
+    }
+    return out;
+}
+
 export async function instructModule(mod, instruction, state) {
     const curData = mod === 'core' ? state.core : state.data[mod];
     const L = [
@@ -44,8 +77,8 @@ export async function analyzeMessage(idx) {
     const r = compute(idx);
     if (!r) return;
     const prevUser = [...c.chat.slice(0, idx)].reverse().find(x => x.is_user);
-    const inj = buildInjection(r);
-    const prompt = `${inj.main.replace(/\[STATUS OUTPUT\][\s\S]*$/, '')}\n${inj.people}\n\nKeys: ${tagKeysFor(getMeta()).join(' · ')}\n\n=== {{user}} ===\n${short(prevUser?.mes ?? '', 1500)}\n\n=== REPLY ===\n${short(stripStatus(m.mes), 4000)}`;
+    const inj = buildInjection(r, { noOutput: true });
+    const prompt = `${inj.main}\n${inj.people}\n\nKeys: ${tagKeysFor(getMeta()).join(' · ')}\n\n=== {{user}} ===\n${short(prevUser?.mes ?? '', 1500)}\n\n=== REPLY ===\n${short(stripStatus(m.mes), 4000)}`;
     try {
         const out = await aiGenerate('analyze', P('ai.analyze'), prompt, 600);
         const ops = extractOps(out.includes('<status>') ? out : `<status>\n${out}\n</status>`);
@@ -74,7 +107,28 @@ function aboutPerson(who, state) {
         `Recent story (for context):\n${recentChat(8)}`,
     ].filter(Boolean);
 }
-const threadText = (ct, who, n = 14) => (ct.threads[who] ?? []).filter(m => !m.pending).slice(-n).map(m => `${m.from === 'me' ? '{{user}}' : who}: ${m.text}`).join('\n');
+const threadText = (ct, who, n = 14) => (ct.threads[who] ?? []).filter(m => !m.pending).slice(-n).map(m => `${m.from === 'me' ? '{{user}}' : who}: ${msgText(m)}`).join('\n');
+
+// 연락 대화 한 줄 요약 (반영 모드 = 요약)
+export async function summarizeThread(who, state) {
+    const ct = state.data.contact;
+    const out = await aiGenerate('csum', P('ai.csum', { who }), `Conversation (oldest first):\n${threadText(ct, who, 40)}`, 200);
+    return finText(stripStatus(out).split(/\r?\n/).map(x => x.trim()).filter(Boolean)[0] ?? '');
+}
+// 물가 질문: "이 세계에서 ○○ 사려면 얼마?"
+export async function askPrice(question, state) {
+    const w = state.data.wallet;
+    const L = [
+        `World: ${state.core.title} (${state.core.genre}) — ${short(state.core.summary, 400)}`,
+        `Currency: ${w.currency}${w.fx?.rate ? ` (1 ${w.currency} ≈ ${fmtNum(w.fx.rate)} ${w.fx.unit})` : ''}`,
+        w.prices.length ? `Known prices: ${w.prices.map(p => `${p.name} ${fmtNum(p.price)}`).join(', ')}` : '',
+        state.data.shop?.shops.length ? `Shop items: ${state.data.shop.shops.flatMap(sh => sh.items.slice(0, 6).map(i => `${i.name} ${fmtNum(i.price)}`)).slice(0, 20).join(', ')}` : '',
+        `Question: ${question}`,
+    ].filter(Boolean);
+    const out = stripStatus(await aiGenerate('price', P('ai.price', { currency: w.currency }), L.join('\n'), 300));
+    const m = out.match(/PRICE\s*[:：]\s*(.+?)\s*=\s*([\d.,]+)/i);
+    return { text: await finText(out.replace(/PRICE\s*[:：].*$/im, '').trim()), item: m?.[1]?.trim() ?? '', price: m ? Number(m[2].replace(/,/g, '')) : 0 };
+}
 const nameRe = (who) => new RegExp(`^\\s*(?:[-*•]\\s*)?(?:${who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:：]\\s*)?`);
 
 // 메신저/즉시 통신 답장 → 말풍선 줄들

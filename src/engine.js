@@ -2,7 +2,7 @@
 import {
     app, ctx, settings, getMeta, saveMeta, modOn, MOD_IDS, MOD, EMPTY, NORM, normalize, clone, clamp, num, norm, findBy, parseNum, splitBar,
     signed, fmtNum, short, dayIndex, addDays, dateStr, eventsOn, parseDate, nowTick, tickUnit, stamp, esc, TITLE, INJECT_KEY, INJECT_KEY2,
-    PROMPT_IN_CHAT, ROLE_SYSTEM, MODULE, uid, diffOf, LOG, CONTACT_MODES,
+    PROMPT_IN_CHAT, ROLE_SYSTEM, MODULE, uid, diffOf, LOG, CONTACT_MODES, touchContact, tidy, msgText, nextTime,
 } from './core.js';
 import { P } from './prompts.js';
 
@@ -20,6 +20,7 @@ export const KEYMAP = {
     aff: 'aff', '호감': 'aff', '호감도': 'aff', trust: 'trust', '신뢰': 'trust', '신뢰도': 'trust',
     rel: 'rel', '관계': 'rel', pair: 'pair', '인물관계': 'pair',
     date: 'date', '날짜': 'date', day: 'date', '일': 'date', time: 'time', '시간': 'time', '시간대': 'time',
+    days: 'date', '날짜이동': 'date', period: 'time', slot: 'time',
     event: 'event', '일정': 'event',
     ach: 'ach', '업적': 'ach', achievement: 'ach',
     memo: 'memo', '메모': 'memo', note: 'memo',
@@ -30,11 +31,12 @@ export const KEYMAP = {
     news: 'news', '뉴스': 'news', '소식': 'news',
     rumor: 'rumor', gossip: 'rumor', '소문': 'rumor', '가십': 'rumor',
     post: 'post', '게시글': 'post', '게시판': 'post',
+    curse: 'curse', '저주': 'curse', blessing: 'curse', '축복': 'curse',
 };
 export const KEY_MOD = {
     stat: 'stats', attr: 'stats', cond: 'stats', cash: 'wallet', item: 'wallet', stock: 'shop', decor: 'home', room: 'home', loc: 'map', place: 'map',
     aff: 'rel', trust: 'rel', rel: 'rel', pair: 'rel', date: 'calendar', time: 'calendar', event: 'calendar', ach: 'ach', memo: 'memo', msg: 'contact',
-    npc: 'profile', roll: 'dice', quest: 'quest', news: 'news', rumor: 'gossip', post: 'board',
+    npc: 'profile', roll: 'dice', quest: 'quest', news: 'news', rumor: 'gossip', post: 'board', curse: 'fate',
 };
 
 const BLOCK_RE = /<status>([\s\S]*?)(?:<\/status>|$)/gi;
@@ -51,12 +53,197 @@ export function extractOps(text) {
 }
 export const stripStatus = (t) => String(t ?? '').replace(/<status>[\s\S]*?(?:<\/status>|$)/gi, '').trim();
 
+// ───── 서랍: <status>를 읽은 뒤 본문에서 떼어 메시지 숨은 칸(extra)에 보관 ─────
+// 본문엔 이야기만 남아서 다른 확장(요약·번역·로그 복사)이 변화량 줄을 보지 않는다.
+export function drawerOps(m) {
+    const d = m?.extra?.[MODULE]?.bySwipe?.[m?.swipe_id ?? 0];
+    return Array.isArray(d) ? d : null;
+}
+function syncSwipe(m) {
+    const sid = m.swipe_id;
+    if (typeof sid !== 'number' || !Array.isArray(m.swipes) || typeof m.swipes[sid] !== 'string') return;
+    m.swipes[sid] = m.mes;
+    if (Array.isArray(m.swipe_info) && m.swipe_info[sid] && typeof m.swipe_info[sid] === 'object') m.swipe_info[sid].extra = structuredClone(m.extra);
+}
+export function setDrawer(m, ops) {
+    m.extra ??= {};
+    m.extra[MODULE] ??= {};
+    m.extra[MODULE].bySwipe ??= {};
+    m.extra[MODULE].bySwipe[m.swipe_id ?? 0] = ops;
+    syncSwipe(m);
+}
+// replace = true: 서랍을 새 내용으로 바꿈 / false: 이어 쓰기(continue)처럼 뒤에 덧붙임
+export function stashStatus(m, { replace = false } = {}) {
+    if (!m || m.is_user || typeof m.mes !== 'string' || !/<status>/i.test(m.mes)) return false;
+    const ops = extractOps(m.mes);
+    const old = replace ? [] : (drawerOps(m) ?? []);
+    m.mes = m.mes.replace(/\s*<status>[\s\S]*?(?:<\/status>|$)/gi, '').replace(/\s+$/, '');
+    setDrawer(m, [...old, ...ops]);
+    return true;
+}
+// 한 메시지의 모든 스와이프에서 태그를 보관 (옛 채팅 정리용) → 옮긴 개수
+export function stashAllSwipes(m) {
+    if (!m || m.is_user) return 0;
+    let n = 0;
+    if (Array.isArray(m.swipes)) m.swipes.forEach((t, sid) => {
+        if (sid === (m.swipe_id ?? 0) || typeof t !== 'string' || !/<status>/i.test(t)) return;
+        const info = m.swipe_info?.[sid];
+        if (!info || typeof info !== 'object') return; // 보관할 칸이 없으면 그대로 둔다
+        info.extra ??= {}; info.extra[MODULE] ??= {}; info.extra[MODULE].bySwipe ??= {};
+        info.extra[MODULE].bySwipe[sid] = extractOps(t);
+        m.swipes[sid] = t.replace(/\s*<status>[\s\S]*?(?:<\/status>|$)/gi, '').replace(/\s+$/, '');
+        n++;
+    });
+    if (stashStatus(m, { replace: true })) n++;
+    return n;
+}
+// 상태 계산에 넣을 AI 메시지인가: 숨김(/hide·요약 확장)으로 is_system이 된 답도 포함, 진짜 시스템 메시지(extra.type)는 제외
+export const isStoryAI = (m) => !!m && !m.is_user && (!m.is_system || !m.extra?.type);
+
 function ensure(s, mod) {
     if (!s.data[mod]) s.data[mod] = EMPTY[mod]();
     return s.data[mod];
 }
 const QSTATUS = { open: 'open', new: 'open', '새': 'open', '등록': 'open', '공고': 'open', active: 'active', '수락': 'active', '진행': 'active', '진행중': 'active', '시작': 'active', done: 'done', '완료': 'done', '성공': 'done', '달성': 'done', failed: 'failed', fail: 'failed', '실패': 'failed', '포기': 'failed' };
 const QNAME = { open: '새 의뢰', active: '진행', done: '완료', failed: '실패' };
+
+// ───── 운명 · 돈: 효과 계산 ─────
+// 문자열 시드 → 0~1 난수 (같은 채팅·같은 날이면 늘 같은 결과 — 다시 계산해도 바뀌지 않게)
+export function seeded(str) {
+    let h = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+    return () => {
+        h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+        const t = (h ^= h >>> 16) >>> 0;
+        return t / 4294967296;
+    };
+}
+const effSum = (s, re) => {
+    let n = 0;
+    for (const c of s?.data?.fate?.curses ?? []) for (const e of c.effects) { const m = e.match(re); if (m) n += parseFloat(m[1].replace('−', '-')); }
+    return n;
+};
+export const priceMul = (s) => Math.max(0.1, 1 + effSum(s, /(?:가격|물가|prices?)\s*([+\-−]?\d+(?:\.\d+)?)\s*%/i) / 100);
+export const affMul = (s) => Math.max(0, 1 + effSum(s, /(?:호감|aff(?:ection)?)\s*(?:상승|획득|gains?)?\s*([+\-−]?\d+(?:\.\d+)?)\s*%/i) / 100);
+export const loanBlocked = (s) => (s?.data?.fate?.curses ?? []).some(c => c.effects.some(e => /대출\s*불가|no\s+loans?/i.test(e)));
+export const LOAN_KIND = {
+    bank: { name: '은행', rate: 10, days: 30, icon: 'fa-building-columns' },
+    shark: { name: '사채', rate: 30, days: 7, icon: 'fa-skull-crossbones' },
+    pawn: { name: '전당포', rate: 10, days: 14, icon: 'fa-ring' },
+};
+export const CREDIT_CURSE = { name: '신용불량', kind: 'curse', desc: '빚을 제때 갚지 못했다', effects: ['가격 +30%', '대출 불가'], days: null, cure: '연체된 빚을 모두 갚기', auto: 'debt' };
+const today = (s) => (s.data.calendar ? dayIndex(s.data.calendar) : null);
+const PERIOD = (s, every) => (every === 'day' ? 1 : every === 'week' ? Math.max(1, s.data.calendar?.week?.length || 7) : 30);
+// "체력 -5" · "돈 +10" · "cash: +200" · 여러 개는 ; 또는 줄바꿈
+export function applyLines(s, text, info) {
+    for (const raw of String(text ?? '').split(/\s*[;\n]\s*/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        const kv = line.match(/^([^:：]{1,24})\s*[:：]\s*(.+)$/);
+        if (kv) { applyOp(s, kv[1].trim(), kv[2], info); continue; }
+        const nv = line.match(/^(.+?)\s+([=+\-−]?\d[\d.,]*)$/);
+        if (!nv) continue;
+        const nm = nv[1].trim();
+        // 게이지·능력치 이름이 먼저 (예: 'HP'는 키 별칭이기도 해서)
+        if (findBy(s.data.stats?.bars ?? [], nm)) applyOp(s, 'stat', `${nm} ${nv[2]}`, info);
+        else if (findBy(s.data.stats?.attrs ?? [], nm)) applyOp(s, 'attr', `${nm} ${nv[2]}`, info);
+        else applyOp(s, nm, nv[2], info);
+    }
+}
+function addCurse(s, c, info) {
+    const f = ensure(s, 'fate');
+    const ex = findBy(f.curses, c.name);
+    if (ex) { ex.since = today(s); return; }
+    f.curses.push({ name: c.name, kind: c.kind ?? 'curse', desc: c.desc ?? '', effects: [...(c.effects ?? [])], days: c.days ?? null, since: today(s), cure: c.cure ?? '', auto: c.auto ?? '' });
+    info.labels.push(`${c.kind === 'bless' ? '✨' : '☠'} ${c.name}`);
+    info.alerts.push(`${c.kind === 'bless' ? '축복' : '저주'} — ${c.name}${c.effects?.length ? ` (${c.effects.join(', ')})` : ''}`);
+}
+function liftDebtCurse(s, info) {
+    const w = s.data.wallet, f = s.data.fate;
+    if (!f || w?.loans.some(l => l.status === 'late')) return;
+    const k = f.curses.findIndex(c => c.auto === 'debt');
+    if (k >= 0) { info.labels.push(`해제: ${f.curses[k].name}`); f.curses.splice(k, 1); }
+}
+function drawCard(s, card, info) {
+    if (!card) return;
+    const f = ensure(s, 'fate');
+    const day = today(s);
+    f.today = { title: card.title, desc: card.desc, day: day ?? s.turn };
+    f.log.push({ title: card.title, kind: card.kind, date: stamp(s) });
+    if (f.log.length > 30) f.log.shift();
+    info.labels.push(`🃏 ${card.title}`);
+    info.alerts.push(`이벤트 카드 — ${card.title}${card.desc ? `: ${short(card.desc, 50)}` : ''}`);
+    applyLines(s, card.effect, info);
+}
+// 하루가 지날 때마다: 정기 수입·지출 · 빚 연체 · 저주의 매일 효과와 기간 · 이벤트 카드
+function dayTick(s, info, from, to) {
+    const end = Math.min(to, from + 60);
+    for (let day = from + 1; day <= end; day++) {
+        const w = s.data.wallet, f = s.data.fate;
+        if (w && info.mods?.wallet !== false) {
+            for (const r of w.regular) {
+                const per = PERIOD(s, r.every);
+                if (r.next === null) r.next = from + per;
+                let guard = 0;
+                while (r.next <= day && guard++ < 400) {
+                    applyOp(s, 'cash', `${r.amount >= 0 ? '+' : '-'}${Math.abs(r.amount)}`, info);
+                    r.next += per;
+                }
+            }
+            for (const l of w.loans) {
+                if (l.status !== 'open' || l.due === null || day <= l.due) continue;
+                if (l.kind === 'pawn') { l.status = 'lost'; info.alerts.push(`전당포 기한이 지나 ${l.item || '맡긴 물건'}을(를) 잃었다`); continue; }
+                l.status = 'late';
+                info.alerts.push(`${LOAN_KIND[l.kind].name} 빚 ${fmtNum(l.owed)} ${w.currency} 연체!`);
+                if (info.mods?.fate !== false) addCurse(s, CREDIT_CURSE, info);
+            }
+        }
+        if (f && info.mods?.fate !== false) {
+            for (const c of [...f.curses]) {
+                for (const e of c.effects) { const m = e.match(/^(?:매일|daily|every\s*day)\s*[:：]?\s*(.+)$/i); if (m) applyLines(s, m[1], info); }
+                if (c.days && c.since !== null && day >= c.since + c.days) {
+                    f.curses.splice(f.curses.indexOf(c), 1);
+                    info.labels.push(`해제: ${c.name}`); info.alerts.push(`${c.name}이(가) 풀렸다`);
+                }
+            }
+            if (f.deck.length && f.drawChance > 0) {
+                const r = seeded(`${info.seed}:day${day}`);
+                if (r() * 100 < f.drawChance) drawCard(s, f.deck[Math.floor(r() * f.deck.length)], info);
+            }
+        }
+    }
+}
+// 자동 규칙: 조건이 '거짓 → 참'으로 바뀔 때 한 번 실행
+function metric(s, lhs) {
+    const t = lhs.trim();
+    const w = s.data.wallet;
+    if (w && (['돈', '소지금', 'cash', 'money'].includes(t) || norm(t) === norm(w.currency))) return w.cash;
+    const rm = t.match(/^(호감|신뢰|aff|trust)\s*[:：]\s*(.+)$/i);
+    if (rm) { const r = findBy(s.data.rel?.user ?? [], rm[2]); return r ? r[/호감|aff/i.test(rm[1]) ? 'aff' : 'trust'] : null; }
+    if (t === '빚' || t === 'debt') return (w?.loans ?? []).filter(l => l.status === 'open' || l.status === 'late').reduce((a, l) => a + l.owed, 0);
+    const bar = findBy(s.data.stats?.bars ?? [], t); if (bar) return bar.cur;
+    const at = findBy(s.data.stats?.attrs ?? [], t); if (at) return at.val;
+    return null;
+}
+export function ruleTrue(s, when) {
+    const m = String(when ?? '').match(/^(.+?)\s*(<=|>=|==|=|<|>)\s*(-?[\d.,]+)\s*$/);
+    if (!m) return false;
+    const v = metric(s, m[1]); if (v === null || v === undefined) return false;
+    const n = parseFloat(m[3].replace(/,/g, ''));
+    return { '<': v < n, '<=': v <= n, '>': v > n, '>=': v >= n, '=': v === n, '==': v === n }[m[2]];
+}
+function checkRules(s, info) {
+    const f = s.data.fate;
+    if (!f?.rules.length || info.mods?.fate === false || info.inRule) return;
+    info.inRule = true;
+    try {
+        for (const r of f.rules) {
+            const now = !!ruleTrue(s, r.when);
+            if (now && !r.on) { r.on = true; info.labels.push(`⚙ ${r.name}`); applyLines(s, r.then, info); }
+            else if (!now && r.on) r.on = false;
+        }
+    } finally { info.inRule = false; }
+}
 
 export function applyOp(s, rawKey, rawVal, info) {
     let key = KEYMAP[String(rawKey).trim().toLowerCase()] ?? (String(rawKey).startsWith('_') ? String(rawKey) : null);
@@ -73,6 +260,51 @@ export function applyOp(s, rawKey, rawVal, info) {
     if (!val && !key.startsWith('_')) return;
     const L = (t) => info.labels.push(t);
     switch (key) {
+        case 'curse': {
+            const [n0, eff, days, cure, kind] = splitBar(val);
+            const nm = n0.replace(/^[+\-−]\s*/, '').trim();
+            if (!nm) return;
+            const f = ensure(s, 'fate');
+            if (/^[-−]/.test(n0) || /^(해제|없음|풀림)$/.test(eff ?? '')) {
+                const ex = findBy(f.curses, nm);
+                if (ex) { f.curses.splice(f.curses.indexOf(ex), 1); L(`해제: ${ex.name}`); }
+                return;
+            }
+            addCurse(s, { name: nm, kind: /축복|bless/i.test(`${kind ?? ''}${rawKey}`) ? 'bless' : 'curse', effects: String(eff ?? '').split(/\s*[,，]\s*/).filter(Boolean), days: parseInt(days, 10) > 0 ? parseInt(days, 10) : null, cure: cure ?? '' }, info);
+            return;
+        }
+        case '_effect': applyLines(s, val, info); return;
+        case '_draw': {
+            // 뽑은 카드 자체를 기록에 담는다 (나중에 덱을 고쳐도 지난 결과가 바뀌지 않게). 옛 기록(번호)도 읽는다.
+            let card = null;
+            try { card = val.startsWith('{') ? JSON.parse(val) : s.data.fate?.deck[Number(val)]; } catch { /* broken */ }
+            if (card?.title) drawCard(s, card, info);
+            return;
+        }
+        case '_loan': {
+            const w = ensure(s, 'wallet');
+            const [kind0, amt0, item] = splitBar(val);
+            const kind = LOAN_KIND[kind0] ? kind0 : 'bank';
+            const amount = Math.max(0, Math.round(num(amt0, 0)));
+            if (!amount) return;
+            const K = LOAN_KIND[kind];
+            const t = today(s);
+            if (kind === 'pawn' && item) { const ex = findBy(w.items, item); if (!ex) return; ex.qty -= 1; if (ex.qty <= 0) w.items.splice(w.items.indexOf(ex), 1); }
+            w.loans.push({ id: `${info.seed}:loan${w.loans.length}`, kind, lender: K.name, principal: amount, owed: Math.round(amount * (1 + K.rate / 100)), due: t === null ? null : t + K.days, item: item ?? '', status: 'open' });
+            w.cash += amount;
+            L(`💰 ${K.name} +${fmtNum(amount)}`);
+            return;
+        }
+        case '_repay': {
+            const w = s.data.wallet; if (!w) return;
+            const l = w.loans.find(x => x.id === val && (x.status === 'open' || x.status === 'late'));
+            if (!l || w.cash < l.owed) return;
+            w.cash -= l.owed; l.status = 'paid';
+            if (l.kind === 'pawn' && l.item) { const ex = findBy(w.items, l.item); if (ex) ex.qty++; else w.items.push({ name: l.item, qty: 1, desc: '', effect: '' }); }
+            L(`💸 ${l.lender} 빚 청산 −${fmtNum(l.owed)}`);
+            liftDebtCurse(s, info);
+            return;
+        }
         case 'stat': {
             const st = ensure(s, 'stats');
             const m = val.match(/^(.+?)\s*(max|최대)?\s*([=+\-−][\d.,]+|\d[\d.,]*)\s*$/i);
@@ -221,6 +453,7 @@ export function applyOp(s, rawKey, rawVal, info) {
             let r = findBy(rl.user, nm);
             if (!r) { r = { name: nm, label: '', aff: 0, trust: 0, memo: '' }; rl.user.push(r); }
             const p = parseNum(m[2].replace(/\s+/g, '')); if (!p) return;
+            if (key === 'aff' && p.mode === 'add' && p.v > 0) p.v = p.v * affMul(s); // 저주·축복의 호감 % 효과
             const b = r[key]; r[key] = clamp(Math.round(p.mode === 'add' ? b + p.v : p.v), -100, 100);
             if (m[3]) r.memo = m[3];
             if (r[key] !== b) L(`${key === 'aff' ? '♥' : '🤝'} ${r.name} ${signed(r[key] - b)}`);
@@ -260,6 +493,7 @@ export function applyOp(s, rawKey, rawVal, info) {
                 cal.m = clamp(dt.m, 1, cal.months.length); cal.d = clamp(dt.d, 1, cal.months[cal.m - 1].days);
             }
             const diff = dayIndex(cal) - before;
+            if (diff > 0) dayTick(s, info, before, dayIndex(cal));
             if (diff) {
                 L(`📅 ${diff > 0 ? `+${diff}일` : `${diff}일`}`);
                 const ev = eventsOn(cal, cal.y, cal.m, cal.d);
@@ -318,6 +552,7 @@ export function applyOp(s, rawKey, rawVal, info) {
             (ct.threads[who] ??= []).push({ id: `${info.seed}:m${ct.threads[who].length}`, from: 'them', text, date: stamp(s), at: t, arrive: t, courier: cour, express: false, rush: false, pending: false, fee: 0, edited: false, ping: true });
             if (ct.threads[who].length > 80) ct.threads[who] = ct.threads[who].slice(-80);
             ct.unread[who] = (ct.unread[who] ?? 0) + 1;
+            touchContact(ct, who);
             L(`${letter ? '✉️ 편지' : '💬'} ${who}`);
             info.alerts.push(`${letter ? `📬 ${who}의 편지가 도착했다` : `${ct.app} — ${who}`}: ${short(text, 40)}`);
             return;
@@ -378,7 +613,6 @@ export function applyOp(s, rawKey, rawVal, info) {
             const [title, body, tag] = splitBar(val);
             if (!title) return;
             nw.items.push({ id: `${info.seed}:n${nw.items.length}`, title, body: body ?? '', tag: tag ?? '', date: stamp(s), read: false });
-            if (nw.items.length > 40) nw.items.shift();
             L(`📰 ${short(title, 18)}`);
             return;
         }
@@ -387,7 +621,6 @@ export function applyOp(s, rawKey, rawVal, info) {
             const [title, body, about] = splitBar(val);
             if (!title) return;
             gs.issues.push({ id: `${info.seed}:g${gs.issues.length}`, title, body: body ?? '', about: String(about ?? '').split(/\s*[,，]\s*/).filter(Boolean), heat: 2, date: stamp(s), read: false });
-            if (gs.issues.length > 30) gs.issues.shift();
             L(`🍷 소문: ${short(title, 16)}`);
             return;
         }
@@ -396,7 +629,6 @@ export function applyOp(s, rawKey, rawVal, info) {
             const [author, title, body] = splitBar(val);
             if (!title) return;
             bd.posts.push({ id: `${info.seed}:p${bd.posts.length}`, author: author || '익명', title, body: body ?? '', date: stamp(s), mine: false, tag: '', replies: [] });
-            if (bd.posts.length > 40) bd.posts.shift();
             L(`📋 ${short(title, 18)}`);
             return;
         }
@@ -446,7 +678,7 @@ function msgOps(m) {
 }
 
 const adjEvents = new Map();
-export function compute(limit) {
+export function compute(limit, opts = {}) {
     const c = ctx();
     const meta = getMeta();
     if (!meta?.base) return null;
@@ -459,7 +691,7 @@ export function compute(limit) {
     const adj = (meta.adjust ?? []).slice().sort((a, b) => a.at - b.at || a.t - b.t);
     const seed = String(c.getCurrentChatId?.() ?? MODULE);
     let lastAI = -1;
-    for (let i = n - 1; i >= start; i--) if (chat[i] && !chat[i].is_user && !chat[i].is_system) { lastAI = i; break; }
+    for (let i = n - 1; i >= start; i--) if (isStoryAI(chat[i])) { lastAI = i; break; }
     let ai = 0;
     const runAdjust = (a) => {
         const info = { seed: `${seed}:adj:${a.t}`, labels: [], alerts: [], mods: meta.mods, meta };
@@ -468,30 +700,39 @@ export function compute(limit) {
             else if (MOD_IDS.includes(a.set.mod)) s.data[a.set.mod] = clone(a.set.data);
         }
         for (const [k, v] of a.ops ?? []) applyOp(s, k, v, info);
+        checkRules(s, info);
         adjEvents.set(a.t, info.alerts);
         if (a.at > lastAI && a.label && !a.silent) s.recent.push(a.label);
     };
     for (let i = start; i < n; i++) {
         while (ai < adj.length && adj[ai].at <= i) runAdjust(adj[ai++]);
         const m = chat[i];
-        if (!m || m.is_user || m.is_system) continue;
+        if (!isStoryAI(m)) continue;
         s.turn++;
         const ops = msgOps(m);
         if (!ops.length) continue;
         const info = { seed: `${seed}:${i}`, labels: [], alerts: [], mods: meta.mods, roll: null, meta };
         for (const [k, v] of ops) applyOp(s, k, v, info);
+        checkRules(s, info);
         snaps.set(i, { labels: info.labels, alerts: info.alerts, roll: info.roll });
         if (i === lastAI && info.roll) s.pendingRoll = info.roll;
     }
-    while (ai < adj.length) runAdjust(adj[ai++]);
-    return { state: s, snaps, lastAI };
+    const adjLimit = opts.bake ? n : Infinity;
+    while (ai < adj.length && adj[ai].at <= adjLimit) runAdjust(adj[ai++]);
+    for (const m of ['news', 'gossip', 'board', 'quest']) if (s.data[m]) tidy(m, s.data[m]);
+    return { state: s, snaps, lastAI, rest: adj.slice(ai) };
 }
 
 // 직접 편집·구매·추가 지시 기록
 export async function addAdjust(entry) {
     const meta = getMeta(true);
     meta.adjust ??= [];
-    const a = { at: ctx().chat?.length ?? 0, t: Date.now() + Math.random(), ...entry };
+    // 순서 보장: 같은 밀리초에 두 번 눌러도 누른 순서대로 다시 계산되게 (전에는 난수라 순서가 뒤바뀔 수 있었음)
+    let t = Date.now();
+    for (const e of meta.adjust) if (e.t >= t) t = e.t + 0.001;
+    const a = { at: ctx().chat?.length ?? 0, t, ...entry };
+    // 같은 칸을 통째로 덮는 기록이 이야기 진행 없이 또 오면, 앞 기록의 칸 데이터는 쓸모가 없다 (라벨만 남김) → 채팅 파일 비대 방지
+    if (a.set?.mod) for (const e of meta.adjust) if (e.at === a.at && e.set?.mod === a.set.mod) delete e.set;
     meta.adjust.push(a);
     if (meta.adjust.length > 80) squash(meta);
     await saveMeta();
@@ -501,15 +742,19 @@ export async function addAdjust(entry) {
 export function commit(mod, data, label, extra = {}) {
     return addAdjust({ set: { mod, data: mod === 'core' ? NORM.core(data) : normalize(mod, data) }, label, ...extra });
 }
+const SQUASH_KEEP = 10; // 최근 이만큼의 메시지는 굳히지 않는다 (스와이프·다시 생성이 제대로 되게)
 export function squash(meta) {
-    const r = compute();
-    if (!r) return;
     const chat = ctx().chat ?? [];
+    const start = resolveStart(meta, chat);
+    let cut = Math.max(start, chat.length - SQUASH_KEEP);
+    let r = compute(cut, { bake: true });
+    if (!r) return;
+    if (r.rest.length > 150) { cut = chat.length; r = compute(cut, { bake: true }); } // 최근 기록이 너무 많으면 전부 굳힘
     meta.base = { core: r.state.core, data: r.state.data };
     meta.baseTurn = r.state.turn;
-    meta.startAt = chat.length;
-    meta.startKey = chat.at(-1)?.send_date ?? null;
-    meta.adjust = [];
+    meta.startAt = cut;
+    meta.startKey = chat[cut - 1]?.send_date ?? null;
+    meta.adjust = r.rest;
 }
 
 // ───── 편지 계산 ─────
@@ -545,7 +790,7 @@ export function tagKeysFor(meta) {
     if (on('home')) K.push('decor (+가구 | 방 — when {{user}} gets/places furniture) · room (+새 공간 | 설명)');
     if (on('map')) K.push('loc (장소 — whenever {{user}} moves) · place (이름 | 설명 | 이어진곳 — newly discovered place)');
     if (on('rel')) K.push('aff (이름 ±N — affection) · trust (이름 ±N) · rel (이름 = 관계 이름, when it truly changes) · pair (A & B = 관계)');
-    if (on('calendar')) K.push('date (+1 when days pass / 3월 14일 to jump) · time (one of the time slots) · event (날짜 | 제목 | 설명 — a new appointment)');
+    if (on('calendar')) K.push('days (+1 when days pass / 3월 14일 to jump) · period (one of the time slots) · event (날짜 | 제목 | 설명 — a new appointment)');
     if (on('quest')) K.push('quest (제목 | 새/수락/완료/실패 | 설명 — a new request appears, {{user}} accepts, or it ends; 제목 | 진행 내용 = progress)');
     if (on('news')) K.push('news (헤드라인 | 내용 — only for big public events)');
     if (on('gossip')) K.push('rumor (제목 | 내용 | 관련 인물 — when people start whispering about something)');
@@ -555,12 +800,162 @@ export function tagKeysFor(meta) {
     if (on('contact')) K.push('msg (이름 | 내용 — someone sends {{user}} a message/letter from afar; occasionally, not every turn)');
     if (on('profile')) K.push('npc (이름 | 한 줄 소개 — a new named character who will matter)');
     if (on('dice')) K.push('roll (판정 이름 | 난이도 — ask {{user}} to roll instead of deciding a risky outcome yourself)');
+    if (on('fate')) K.push('curse (이름 | 효과1, 효과2 | 일수 | 풀리는 조건 — only when the story truly curses or blesses {{user}}; -이름 lifts it)');
     return K;
 }
 
-export function buildInjection(r) {
+// ───── 장면 필터: 최근 대화에 나온 인물만 자세히 ─────
+export function sceneTester(set = settings()) {
+    if (!set.sceneFilter) return () => true;
+    const n = clamp(parseInt(set.sceneTurns, 10) || 6, 1, 40);
+    const chat = ctx().chat ?? [];
+    const text = chat.slice(-n).map(m => `${m?.name ?? ''}\n${stripStatus(m?.mes)}`).join('\n');
+    const always = new Set(chatCharacters().map(ch => norm(ch.name)));
+    return (name) => {
+        const nm = String(name ?? '').trim();
+        if (!nm) return false;
+        if (always.has(norm(nm)) || text.includes(nm)) return true;
+        return nm.split(/[\s·.]+/).some(part => part.length >= 2 && text.includes(part));
+    };
+}
+const MOD_SHORT = { easy: '이지', normal: '보통', hard: '하드' };
+
+// 연락 → 본편 반영: 반영 모드(끔·자동·고른 것만·요약)와 연락처별 예외를 따라 고른다
+export function contactPicks(s, meta, set, inScene) {
+    const mode = set.contactReflect ?? (set.contactInject === false ? 'off' : 'auto');
+    const ct = s.data.contact;
+    if (!ct) return [];
+    const now = nowTick(s, meta);
+    const rank = (who) => { const k = (ct.recent ?? []).indexOf(who); return k < 0 ? 999 : k; };
+    const out = [];
+    for (const [who, th0] of Object.entries(ct.threads)) {
+        const c = findBy(ct.contacts, who);
+        const refl = c?.reflect || '';
+        if (refl === 'never' || (mode === 'off' && refl !== 'always' && refl !== 'pinned')) continue;
+        const th = th0.filter(m => !m.pending && (m.arrive ?? -Infinity) <= now);
+        if (!th.length) continue;
+        const how = refl === 'pinned' ? 'pinned' : refl === 'always' ? (mode === 'summary' ? 'summary' : 'auto') : mode;
+        let msgs = [], summary = '';
+        if (how === 'pinned') msgs = th.filter(m => m.pin).slice(-3);
+        else if (how === 'summary') {
+            const sm = ct.summaries?.[who];
+            if (sm) { summary = sm.text; msgs = th.slice(sm.n).slice(-2); } else msgs = th.slice(-3);
+            msgs = [...th.slice(0, sm?.n ?? 0).filter(m => m.pin).slice(-2), ...msgs];
+        } else {
+            const last = th.slice(-3);
+            msgs = [...th.slice(0, -3).filter(m => m.pin).slice(-2), ...last];
+        }
+        if (!msgs.length && !summary) continue;
+        out.push({ who, msgs, summary, always: refl === 'always', scene: inScene(who), r: rank(who) });
+    }
+    out.sort((a, b) => (b.always - a.always) || (b.scene - a.scene) || (a.r - b.r));
+    return out.filter((x, i) => x.always || i < 3);
+}
+function debtText(s, ultra) {
+    const w = s.data.wallet;
+    const open = (w?.loans ?? []).filter(l => l.status === 'open' || l.status === 'late');
+    if (!open.length) return '';
+    const cal = s.data.calendar;
+    const due = (l) => (l.due === null || !cal ? '' : (() => { const c = { ...cal, ...dateFromIndex(cal, l.due) }; return ultra ? `~${c.m}/${c.d}` : ` due ${dateStr(cal, c.y, c.m, c.d)}`; })());
+    return ultra
+        ? `빚:${open.map(l => `${l.lender}${fmtNum(l.owed)}${due(l)}${l.status === 'late' ? '!' : ''}`).join(',')}`
+        : `Debts of {{user}}: ${open.map(l => `${l.lender} ${fmtNum(l.owed)} ${w.currency}${due(l)}${l.status === 'late' ? ' — OVERDUE' : ''}`).join(' · ')}`;
+}
+function dateFromIndex(cal, idx) {
+    const yd = cal.months.reduce((a, m) => a + m.days, 0) || 365;
+    let y = Math.floor(idx / yd) + 1, r = idx - (y - 1) * yd, m = 1;
+    for (const mo of cal.months) { if (r < mo.days) break; r -= mo.days; m++; }
+    return { y, m: Math.min(m, cal.months.length), d: r + 1 };
+}
+function fateText(s, ultra) {
+    const f = s.data.fate; if (!f) return [];
+    const L = [];
+    if (f.curses.length) L.push(ultra
+        ? f.curses.map(c => `${c.kind === 'bless' ? '✨' : '☠'}${c.name}${c.effects.length ? `(${c.effects.join(',')})` : ''}`).join(' ')
+        : `Curses/blessings on {{user}} (real, the story must respect them): ${f.curses.map(c => `${c.name}${c.effects.length ? ` (${c.effects.join(', ')})` : ''}${c.cure ? ` — lifted by: ${c.cure}` : ''}`).join(' · ')}`);
+    const now = s.data.calendar ? dayIndex(s.data.calendar) : s.turn;
+    if (f.today && f.today.day === now) L.push(ultra ? `🃏${f.today.title}:${short(f.today.desc, 60)}` : `Event card today (it happens — weave it into the story): ${f.today.title}${f.today.desc ? ` — ${f.today.desc}` : ''}`);
+    return L;
+}
+
+// 초압축 모드: 기호·키워드만, 범례 1줄, 출력 규칙은 맨 끝 한 줄
+function buildUltra(r, opt = {}) {
+    const s = r.state, d = s.data, meta = getMeta(), set = settings();
+    const on = (id) => modOn(id, meta) && d[id];
+    const inScene = sceneTester(set);
+    const L = [P('inj.ultra')];
+    const head = [MOD_SHORT[diffOf(meta)] ?? diffOf(meta)];
+    if (s.core.title) head.push(`${s.core.title}${s.core.genre ? `(${s.core.genre})` : ''}`);
+    L.push(head.join('|'));
+    if (s.core.userRole) L.push(`{{user}}=${short(s.core.userRole, 70)}`);
+    if (s.core.rules) L.push(`규칙:${short(s.core.rules, 140)}`);
+    if (on('calendar')) {
+        const c = d.calendar;
+        const ev = eventsOn(c, c.y, c.m, c.d).map(e => e.title);
+        const soon = []; const tmp = { ...c };
+        for (let k = 1; k <= 7; k++) { addDays(tmp, 1); for (const e of eventsOn(c, tmp.y, tmp.m, tmp.d)) soon.push(`${e.title}D-${k}`); }
+        L.push(`📅${dateStr(c)} ${c.time}${ev.length ? `|오늘:${ev.join(',')}` : ''}${soon.length ? `|${soon.slice(0, 3).join(',')}` : ''}`);
+    }
+    if (on('map') && d.map.here) {
+        const p = findBy(d.map.places, d.map.here);
+        L.push(`@${d.map.here}${p?.links?.length ? `>${p.links.slice(0, 5).join(',')}` : ''}`);
+    }
+    if (on('stats')) {
+        const st = d.stats, parts = [];
+        if (st.bars.length) parts.push(st.bars.map(b => `${b.name}${fmtNum(b.cur)}/${fmtNum(b.max)}`).join(' '));
+        if (st.attrs.length) parts.push(st.attrs.map(a => `${a.name}${a.val >= 0 ? '+' : ''}${a.val}`).join(' '));
+        if (st.conds.length) parts.push(`⚠${st.conds.map(c => c.name).join(',')}`);
+        if (parts.length) L.push(parts.join('|'));
+    }
+    if (on('wallet')) {
+        const w = d.wallet;
+        L.push(`$${fmtNum(w.cash)}${w.currency}${w.items.length ? `|${w.items.slice(0, 12).map(i => `${i.name}${i.qty > 1 ? `×${i.qty}` : ''}`).join(',')}` : ''}`);
+        const dt = debtText(s, true); if (dt) L.push(dt);
+    }
+    if (on('fate')) L.push(...fateText(s, true));
+    if (on('quest')) {
+        const act = d.quest.list.filter(q => q.status === 'active');
+        if (act.length) L.push(`Q:${act.slice(0, 5).map(q => `${q.title}${q.giver || q.deadline ? `(${[q.giver, q.deadline && `~${q.deadline}`].filter(Boolean).join('·')})` : ''}`).join(' / ')}`);
+    }
+    if (on('rel')) {
+        const here = [], away = [];
+        for (const x of d.rel.user) (inScene(x.name) ? here : away).push(x);
+        if (here.length) L.push(`♥${here.slice(0, 10).map(x => `${x.name}${x.aff}/${x.trust}${x.label ? `[${x.label}]` : ''}`).join(' ')}`);
+        if (away.length) L.push(`(장면 밖:${away.slice(0, 12).map(x => `${x.name}${x.aff}/${x.trust}`).join(' ')})`);
+    }
+    if (on('profile')) {
+        const list = d.profile.list.filter(p => p.role !== 'user' && inScene(p.name)).slice(0, 6);
+        if (list.length) L.push(list.map(p => `👤${p.name}:${short(p.summary, 60)}`).join(' / '));
+    }
+    if (on('contact')) {
+        const ct = d.contact;
+        if (ct.mode === 'letter') L.push('✉편지 세계: 도착 전엔 상대가 내용을 모름');
+        const tr = inTransit(s, meta).filter(x => x.m.from === 'me');
+        if (tr.length) L.push(`✉배송중:${tr.map(x => `${x.who}(${x.left}${tickUnit(s, meta)})`).join(',')}`);
+        for (const x of contactPicks(s, meta, set, inScene).slice(0, 2)) {
+            L.push(`✉${x.who}:${x.summary ? `(${short(x.summary, 50)})` : ''}${x.msgs.slice(-2).map(m => `${m.from === 'me' ? '나›' : ''}${msgText(m, 40)}`).join('/')}`);
+        }
+    }
+    if (on('memo')) {
+        const ms = d.memo.list.filter(m => m.inject);
+        const pins = ms.filter(m => m.pin).slice(-clamp(parseInt(set.pinCap, 10) || 8, 0, 30));
+        const pick = [...pins, ...ms.filter(m => !m.pin).slice(-3)];
+        if (pick.length) L.push(`※${pick.map(m => short(m.text, 60)).join(' / ')}`);
+    }
+    if (on('dice')) L.push('🎲[판정·…]=시스템 결과 그대로 서술 · 위험한 행동은 roll 키로 판정 요청');
+    if (s.recent.length) L.push(`UI행동:${s.recent.slice(-5).join(' / ')}`);
+    if (!opt.noOutput && (set.sync === 'tag' || set.sync === 'tagPlus')) {
+        const keys = tagKeysFor(meta).map(k => k.match(/(^|· )([a-z]+) \(/g)?.map(x => x.replace(/[·( ]/g, '')).join(' ')).join(' ');
+        L.push(P('inj.ultra.output', { keys }));
+    }
+    return { main: L.filter(Boolean).join('\n'), people: '' };
+}
+
+export function buildInjection(r, opt = {}) {
     if (!r) return { main: '', people: '' };
+    if (settings().injectMode === 'ultra') return buildUltra(r, opt);
     const s = r.state, d = s.data, meta = getMeta(), set = settings(), lite = set.injectMode === 'lite';
+    const inScene = sceneTester(set);
     const on = (id) => modOn(id, meta) && d[id];
     const L = [];
     const PP = [];
@@ -593,7 +988,10 @@ export function buildInjection(r) {
     if (on('wallet')) {
         const w = d.wallet;
         L.push(`Money: ${fmtNum(w.cash)} ${w.currency}${w.items.length ? ` · Items: ${w.items.slice(0, 20).map(i => `${i.name}${i.qty > 1 ? `×${i.qty}` : ''}`).join(', ')}` : ''}`);
+        const dt = debtText(s, false); if (dt) L.push(dt);
+        if (w.prices.length && !lite) L.push(`Typical prices: ${w.prices.slice(0, 8).map(p => `${p.name} ${fmtNum(p.price)}`).join(', ')} (${w.currency})`);
     }
+    if (on('fate')) L.push(...fateText(s, false));
     if (on('home') && !lite) {
         const hm = d.home;
         if (hm.name) L.push(`Home: ${hm.name} — ${hm.rooms.map(r => `${r.name}${r.decor.length ? `[${r.decor.slice(0, 6).join(', ')}]` : ''}`).join(' / ')}`);
@@ -613,12 +1011,15 @@ export function buildInjection(r) {
     if (on('gossip') && d.gossip.issues.length && !lite) L.push(`Rumors going around: ${d.gossip.issues.slice(-2).map(x => `${x.title}${x.about.length ? ` (about ${x.about.join(', ')})` : ''}`).join(' / ')}`);
     if (on('rel')) {
         const rl = d.rel;
-        for (const x of rl.user.slice(0, 12)) PP.push(`${x.name}${x.label ? ` [${x.label}]` : ''} → {{user}}: 호감 ${x.aff} · 신뢰 ${x.trust}${x.memo && !lite ? ` — ${short(x.memo, 90)}` : ''}`);
-        if (rl.pairs.length && !lite) PP.push(`Between others: ${rl.pairs.slice(0, 10).map(p => `${p.a}↔${p.b} ${p.label}`).join(' · ')}`);
+        const here = rl.user.filter(x => inScene(x.name)), away = rl.user.filter(x => !inScene(x.name));
+        for (const x of here.slice(0, 12)) PP.push(`${x.name}${x.label ? ` [${x.label}]` : ''} → {{user}}: 호감 ${x.aff} · 신뢰 ${x.trust}${x.memo && !lite ? ` — ${short(x.memo, 90)}` : ''}`);
+        if (away.length) PP.push(`Not in this scene (호감/신뢰): ${away.slice(0, 15).map(x => `${x.name} ${x.aff}/${x.trust}`).join(', ')}`);
+        const pairs = rl.pairs.filter(p => inScene(p.a) || inScene(p.b));
+        if (pairs.length && !lite) PP.push(`Between others: ${pairs.slice(0, 10).map(p => `${p.a}↔${p.b} ${p.label}`).join(' · ')}`);
     }
     if (on('profile')) {
         const pf = d.profile;
-        const list = pf.mode === 'detailed' ? pf.list : pf.list.filter(p => p.role === 'npc');
+        const list = (pf.mode === 'detailed' ? pf.list : pf.list.filter(p => p.role === 'npc')).filter(p => p.role === 'user' || inScene(p.name));
         for (const p of list.slice(0, pf.mode === 'detailed' ? 12 : 8)) {
             const f = pf.mode === 'detailed' && !lite ? ` | ${p.fields.slice(0, 10).map(x => `${x.k}: ${short(x.v, 80)}`).join(' / ')}` : '';
             PP.push(`Profile ${p.name}${p.role === 'user' ? ' ({{user}})' : ''}: ${short(p.summary, 160)}${f}`);
@@ -630,7 +1031,7 @@ export function buildInjection(r) {
     }
     if (on('memo')) {
         const ms = d.memo.list.filter(m => m.inject);
-        const pick = [...ms.filter(m => m.pin), ...ms.filter(m => !m.pin).slice(-6)];
+        const pick = [...ms.filter(m => m.pin).slice(-clamp(parseInt(set.pinCap, 10) || 8, 0, 30)), ...ms.filter(m => !m.pin).slice(-6)];
         if (pick.length) L.push(`Notes: ${pick.map(m => `${m.by === 'user' ? '(user) ' : ''}${short(m.text, 120)}`).join(' / ')}`);
     }
     if (on('contact')) {
@@ -638,10 +1039,8 @@ export function buildInjection(r) {
         if (ct.mode === 'letter') L.push(P('inj.letter', { app: ct.app }));
         const tr = inTransit(s, meta).filter(x => x.m.from === 'me');
         if (tr.length) L.push(`Letters on the way (NOT yet received — the recipients don't know their contents yet): ${tr.map(x => `to ${x.who} (${x.left}${tickUnit(s, meta)} left)`).join(', ')}`);
-        if (set.contactInject) {
-            const now = nowTick(s, meta);
-            const recent = Object.entries(ct.threads).map(([who, th]) => [who, th.filter(m => !m.pending && (m.arrive ?? -Infinity) <= now)]).filter(([, v]) => v.length).sort((a, b) => b[1].length - a[1].length).slice(0, 3);
-            for (const [who, th] of recent) PP.push(`${ct.app} with ${who} (latest): ${th.slice(-3).map(m => `${m.from === 'me' ? '{{user}}' : who}: ${short(m.text, 70)}`).join(' / ')}`);
+        for (const x of contactPicks(s, meta, set, inScene)) {
+            PP.push(`${ct.app} with ${x.who}${x.summary ? ` — so far: ${x.summary}` : ''}${x.msgs.length ? ` (latest): ${x.msgs.map(m => `${m.from === 'me' ? '{{user}}' : x.who}: ${msgText(m, 70)}`).join(' / ')}` : ''}`);
         }
     }
     if (on('dice')) {
@@ -650,7 +1049,7 @@ export function buildInjection(r) {
         L.push(P('inj.dice'));
     }
     if (s.recent.length) L.push(`Since the last reply {{user}} did (via the status UI): ${s.recent.slice(-8).join(' / ')}`);
-    if (set.sync === 'tag' || set.sync === 'tagPlus') {
+    if (!opt.noOutput && (set.sync === 'tag' || set.sync === 'tagPlus')) {
         L.push(P('inj.output'));
         L.push(lite ? `Keys (key: value, ±N for numbers, +/-name for lists, name | detail): ${tagKeysFor(meta).map(k => k.match(/(^|· )([a-z]+) \(/g)?.map(x => x.replace(/[·( ]/g, '')).join(' ')).join(' ')}` : `Keys: ${tagKeysFor(meta).join(' · ')}`);
         if (!lite) L.push(P('inj.example'));
