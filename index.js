@@ -99,12 +99,12 @@ function refreshNow() {
         if (!isActive() || !ready()) { app.current = null; setInjection(null); }
         else {
             app.current = compute();
-            setInjection(getMeta()?.paused ? null : buildInjection(app.current));
-            decorateAll();
+            try { setInjection(getMeta()?.paused ? null : buildInjection(app.current)); } catch (e) { console.error(LOG, 'inject', e); }
+            try { decorateAll(); } catch (e) { console.error(LOG, 'decorate', e); }
         }
-        ensureUI();
-        rerenderPanels();
     } catch (e) { console.error(LOG, e); }
+    // 계산이 어디서 실패해도 상태창 화면은 그린다 (안 그리면 '창이 안 떠요'가 됨)
+    try { ensureUI(); rerenderPanels(); } catch (e) { console.error(LOG, 'ui', e); }
 }
 app.refreshNow = refreshNow;
 

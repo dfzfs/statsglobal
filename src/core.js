@@ -194,23 +194,25 @@ export function getMeta(create = false) {
     if (!md) return null;
     if (!md[MODULE] && create) {
         const def = settings().defaultMods;
-        md[MODULE] = { v: 2, base: null, startAt: 0, startKey: null, adjust: [], mods: Object.fromEntries(MOD_IDS.map(id => [id, def ? def[id] !== false : true])), off: false, difficulty: settings().difficulty, paused: false, skipOnce: false };
+        md[MODULE] = { v: DATA_V, base: null, startAt: 0, startKey: null, adjust: [], mods: Object.fromEntries(MOD_IDS.map(id => [id, def ? def[id] !== false : true])), off: false, difficulty: settings().difficulty, paused: false, skipOnce: false };
     }
     const m = md[MODULE];
     if (m) {
         m.difficulty ??= 'normal'; m.mods ??= {};
-        if ((m.v ?? 1) < 2) migrate(m);
+        if ((m.v ?? 1) < DATA_V) migrate(m); // 옛 버전 채팅 데이터를 지금 모양으로 (새 칸·새 항목 채우기)
     }
     return m ?? null;
 }
 // v1 → v2: 칸 데이터를 새 모양으로 (메시지 id 등) 한 번만 다듬어 둔다
+// 저장 데이터 모양 버전 — 칸에 새 항목이 생기면 올린다 (v3: 재산 물가·빚·정기·일거리, 연락 요약·반영, 운명)
+export const DATA_V = 3;
 function migrate(m) {
     try {
         if (m.base?.data) for (const id of Object.keys(m.base.data)) if (m.base.data[id] && NORM[id]) m.base.data[id] = normalize(id, m.base.data[id]);
         if (m.base?.core) m.base.core = NORM.core(m.base.core);
         for (const a of m.adjust ?? []) if (a.set?.data && NORM[a.set.mod]) a.set.data = a.set.mod === 'core' ? NORM.core(a.set.data) : normalize(a.set.mod, a.set.data);
     } catch (e) { console.warn(LOG, 'migrate', e); }
-    m.v = 2;
+    m.v = DATA_V;
 }
 export async function saveMeta(now = false) {
     const c = ctx();

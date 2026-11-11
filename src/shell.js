@@ -1,6 +1,6 @@
 // 틀: 상태창 패널 · HUD · 사이드(미니) · 떠 있는 버튼 · 만들기 · 프롬프트/토큰 창 · 꾸미기 창
 import {
-    app, ctx, settings, saveSettings, getMeta, saveMeta, modOn, isActive, ready, MODS, MOD, MOD_IDS, EMPTY, NORM, normalize, DIFFS, diffOf, GENRES, CONTACT_MODES,
+    DATA_V, app, ctx, settings, saveSettings, getMeta, saveMeta, modOn, isActive, ready, MODS, MOD, MOD_IDS, EMPTY, NORM, normalize, DIFFS, diffOf, GENRES, CONTACT_MODES,
     esc, short, clone, clamp, fmtNum, h, dateShort, userName, TITLE, LOG, VERSION, MODULE, sub,
 } from './core.js';
 import { compute, buildInjection, setInjection, commit, addAdjust, gatherSources, loreNames, chatCharacters, unreadCount, dueLetters, inTransit } from './engine.js';
@@ -436,7 +436,7 @@ export async function setBase(base, mods, difficulty) {
     meta.startKey = chat.at(-1)?.send_date ?? null;
     meta.adjust = [];
     meta.off = false;
-    meta.v = 2;
+    meta.v = DATA_V;
     if (mods) meta.mods = { ...meta.mods, ...mods };
     if (difficulty && DIFFS[difficulty]) meta.difficulty = difficulty;
     await saveMeta(true);
