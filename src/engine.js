@@ -566,7 +566,6 @@ export function buildInjection(r) {
     const PP = [];
     L.push(P('inj.header'));
     L.push(P(`diff.${diffOf(meta)}`));
-    if (set.genLang === 'en') L.push(P('inj.lang'));
     if (s.core.title || s.core.summary) {
         L.push(`World: ${s.core.title}${s.core.genre ? ` (${s.core.genre})` : ''}${s.core.canon ? ` · canon: ${s.core.canon}` : ''}${s.core.tone ? ` · tone: ${s.core.tone}` : ''}`);
         if (s.core.summary && !lite) L.push(`Setting: ${short(s.core.summary, 600)}`);

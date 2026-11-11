@@ -210,6 +210,7 @@ export function manageHTML(s) {
             <button class="ss-btn" data-act="fillempty">${ai1} 비어 있는 칸 채우기</button>
             <button class="ss-btn" data-act="prompts"><i class="fa-solid fa-scroll"></i> 프롬프트 · 토큰</button>
             <button class="ss-btn" data-act="themewin"><i class="fa-solid fa-palette"></i> 꾸미기</button>
+            <button class="ss-btn" data-act="trsheet"><i class="fa-solid fa-language"></i> 상태창 전체 번역</button>
             <button class="ss-btn" data-act="export"><i class="fa-solid fa-file-export"></i> 내보내기</button>
             <button class="ss-btn" data-act="import"><i class="fa-solid fa-file-import"></i> 가져오기</button>
             <button class="ss-btn" data-act="chatoff"><i class="fa-solid fa-power-off"></i> 이 채팅에서 끄기</button>

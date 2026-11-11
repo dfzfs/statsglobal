@@ -12,6 +12,7 @@ import { DICE_ACTIONS, DICE_CHANGES } from './dice.js';
 import { CONTACT_ACTIONS } from './contact.js';
 import { FEED_ACTIONS } from './feeds.js';
 import { EDIT } from './core.js';
+import { translateSheet } from './translate.js';
 
 export const panels = new Set();
 app.popup = popup;
@@ -169,6 +170,7 @@ async function onPanelAction(el, act, arg, btn) {
         case 'skiponce': { const m = getMeta(true); m.skipOnce = true; await saveMeta(); app.refreshNow(); toastr.info('다음 생성 1번은 상태창 없이 보내요.', TITLE); return; }
         case 'prompts': return openPromptWindow();
         case 'themewin': return openThemeWindow();
+        case 'trsheet': return translateSheet(btn);
         case 'sidemini': settings().sideState = 'mini'; saveSettings(); return ensureUI();
         default: { const fn = ACTIONS[act] ?? MANAGE_ACTIONS[act]; if (fn) return fn(el, arg, btn, s); }
     }
@@ -590,7 +592,7 @@ export async function openPromptWindow(tab = 'when') {
                 ${row('fa-envelope-open-text', '편지 「뜯어 보기」', '도착한 답장 1통마다. 부치는 것 자체는 0', '1회')}
                 ${row('fa-paper-plane', '선톡 · 편지 오게', '누를 때', '1회')}
                 ${row('fa-newspaper', '새 소식 발행 · 새 호 발행 · 새 글 불러오기 · 댓글 달리기 · 의뢰 찾기', '누를 때', '각 1회')}
-                ${row('fa-language', `후번역 — ${set.trMode === 'auto' ? '자동 (새 답마다)' : set.trMode === 'manual' ? '버튼으로만' : '꺼짐'}`, `번역 모델(${set.trProfile ? '고른 연결 프로필' : set.aiProfile ? '확장 AI 모델' : '메인 연결'})로 메시지 1개 = 1회. 입력≈원문, 출력≈번역문`, set.trMode === 'auto' ? '매 답' : set.trMode === 'manual' ? '누를 때' : '꺼짐', set.trMode !== 'off')}`)}
+                ${row('fa-language', `상태창 번역 — ${set.ssGenLang === 'en' ? '켬 (영어로 생성 → 번역)' : '꺼짐 (한국어로 바로 생성)'}`, `켜면 위의 AI 호출마다 번역 모델(${set.trProfile ? '고른 연결 프로필' : '확장 AI 모델'})이 1회 더. 「상태창 전체 번역」은 칸 1개 = 1회`, set.ssGenLang === 'en' ? '+1회씩' : '꺼짐', set.ssGenLang === 'en')}`)}
             ${sec('③ 설정에 따라 자동', `
                 ${row('fa-magnifying-glass', `별도 분석 — 지금: ${syncTxt}`, 'B: 매 AI 응답마다 1회 · A+B: 응답에 &lt;status&gt;가 빠졌을 때만', set.sync === 'analyze' ? '매 응답' : set.sync === 'tagPlus' ? '가끔' : '꺼짐', set.sync === 'analyze' || set.sync === 'tagPlus')}
                 ${row('fa-bell', `자동 선톡 — ${set.autoPing ? `켬 (${set.autoPingEvery}턴마다 확률)` : '꺼짐'}`, '켜 두면 가끔 누군가 먼저 연락해요', set.autoPing ? '가끔' : '꺼짐', set.autoPing)}`)}
@@ -604,7 +606,7 @@ export async function openPromptWindow(tab = 'when') {
             const grp = (g, title) => sec(title, PROMPT_DEFS.filter(p => p.group === g).map(p => {
                 const custom = Object.hasOwn(set.prompts ?? {}, p.key);
                 return `<details class="ss-pdef ${custom ? 'custom' : ''}"><summary><b>${esc(p.label)}</b><small>${esc(p.when)}</small>${custom ? '<em>수정됨</em>' : ''}</summary>
-                    <textarea class="ss-in ss-pta" rows="5" data-pk="${p.key}" spellcheck="false">${esc(P(p.key).replace(/\{([a-z][a-zA-Z0-9_]*)\}/g, '{$1}'))}</textarea>
+                    <textarea class="ss-in ss-pta" rows="5" data-pk="${p.key}" spellcheck="false">${esc(set.prompts?.[p.key] ?? p.text)}</textarea>
                     <div class="ss-row-btns"><button class="ss-btn sm ghost" data-preset="${p.key}"><i class="fa-solid fa-rotate-left"></i> 기본값으로</button><small class="ss-hint">${/\{[a-z]/.test(p.text) ? `바뀌는 칸: ${[...new Set(p.text.match(/\{[a-z][a-zA-Z0-9_]*\}/g))].join(' ')}` : ''} {{user}} {{char}} 같은 실리 매크로도 돼요.</small></div></details>`;
             }).join(''));
             body = `<div class="ss-callout"><i class="fa-solid fa-pen-to-square"></i><div><b>모든 문구를 고칠 수 있어요</b><span>고친 내용은 바로 저장돼요. 칸(JSON) 모양 설명은 고장 방지를 위해 고정이에요.</span></div><button class="ss-btn sm" data-presetall="1">모두 기본값</button></div>

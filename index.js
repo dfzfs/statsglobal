@@ -7,13 +7,12 @@ import { listProfiles } from './src/prompts.js';
 import { diffHTML, confirmPopup, applyTheme } from './src/kit.js';
 import { ensureUI, rerenderPanels, openSheet, openWizard, openRoll, openPromptWindow, openThemeWindow, panels, renderHud } from './src/shell.js';
 import { receivePing } from './src/contact.js';
-import { translateMessage, translateAll, clearAll, decorateTranslations, cleanStale, onRendered as trRendered } from './src/translate.js';
+import { translateSheet } from './src/translate.js';
 
 const REGEX_IDS = { show: 'b7c1a0e2-5a1d-4f0e-9a51-55a1a0c05501', strip: 'b7c1a0e2-5a1d-4f0e-9a51-55a1a0c05502' };
 
 // ───── 메시지 변동 칩 ─────
 function decorateAll() {
-    try { decorateTranslations(); } catch (e) { console.warn(LOG, e); }
     if (!app.current) return;
     const set = settings();
     document.querySelectorAll('#chat .mes').forEach(mesEl => {
@@ -76,7 +75,7 @@ function removeRegex() {
 
 // ───── 갱신 ─────
 let refreshTimer = null;
-function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { try { cleanStale(); } catch { /* */ } refreshNow(); }, 60); }
+function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshNow, 60); }
 function refreshNow() {
     clearTimeout(refreshTimer);
     try {
@@ -122,17 +121,12 @@ function renderSettings() {
                 ${o('sync', 'off', 'C. 끔 — 직접 편집·추가 지시로만')}</select></label>
             <label>규칙 주입<select class="text_pole" data-s="injectMode">${o('injectMode', 'full', '전체 (세계 요약·예시 포함)')}${o('injectMode', 'lite', '간결 (토큰 절약)')}</select></label>
             <label>메시지 변동 칩<select class="text_pole" data-s="msgCard">${o('msgCard', 'compact', '보이기')}${o('msgCard', 'off', '숨기기')}</select></label>
-            <b class="ss-set-h">언어 · 후번역</b>
-            <small>본편은 실리태번 <b>메인 연결</b>의 모델로 생성돼요. 번역은 아래에서 고른 모델(싼 모델 추천)이 따로 해요. 번역은 화면에만 보이고 AI에게는 원문이 가요.</small>
-            <label>본편 생성 언어<select class="text_pole" data-s="genLang">${o('genLang', 'ko', '한국어 (번역 필요 없음)')}${o('genLang', 'en', '영어로 생성 → 번역해서 보기')}</select></label>
-            <label>후번역<select class="text_pole" data-s="trMode">${o('trMode', 'off', '끔')}${o('trMode', 'auto', '자동 — 새 AI 답마다 번역 (답 1개 = 번역 1회)')}${o('trMode', 'manual', '버튼으로만')}</select></label>
+            <b class="ss-set-h">상태창 언어 · 번역</b>
+            <small>상태창 칸(프로필·상점·편지·뉴스…)을 만드는 <b>확장 AI 모델</b>과, 그걸 번역하는 <b>번역 모델</b>을 따로 고를 수 있어요. 롤플 본문과는 상관없어요.</small>
+            <label>상태창 생성 언어<select class="text_pole" data-s="ssGenLang">${o('ssGenLang', 'ko', '한국어로 바로 생성 (번역 없음)')}${o('ssGenLang', 'en', '영어로 생성 → 번역 모델로 번역 (생성마다 번역 1회 추가)')}</select></label>
             <label>번역 모델 (연결 프로필)<div class="ss-set-inline"><select class="text_pole" data-s="trProfile">${profileOptions(s.trProfile).replace('메인 연결 그대로', '확장 AI 모델 그대로 (없으면 메인)')}</select></div></label>
             <label>번역할 언어<input class="text_pole" data-s="trLang" value="${esc(s.trLang)}"></label>
-            <div class="ss-set-btns">
-                <button class="menu_button" data-s-act="trlast"><i class="fa-solid fa-language"></i> 마지막 답 번역</button>
-                <button class="menu_button" data-s-act="trall"><i class="fa-solid fa-language"></i> 채팅 전체 번역</button>
-                <button class="menu_button" data-s-act="trclear">번역 지우기</button>
-            </div>
+            <div class="ss-set-btns"><button class="menu_button" data-s-act="trsheet"><i class="fa-solid fa-language"></i> 상태창 전체 번역</button></div>
             <b class="ss-set-h">일시정지 · OOC</b>
             <label class="checkbox_label"><input type="checkbox" data-s="oocDetect" ${s.oocDetect ? 'checked' : ''}> 내 메시지가 OOC로 시작하면 그 턴은 상태창 안 보냄 <small>((, (OOC, [OOC, //</small></label>
             <label class="checkbox_label"><input type="checkbox" data-s="skipQuiet" ${s.skipQuiet ? 'checked' : ''}> 조용한 생성·퀵리플라이(/gen 등)엔 안 보냄</label>
@@ -177,9 +171,7 @@ function renderSettings() {
         if (a === 'defmods') { const m = getMeta(); if (!m) return; settings().defaultMods = { ...m.mods }; saveSettings(); toastr.success('저장했어요.', TITLE); }
         if (a === 'regex') installRegex() ? toastr.success('설치했어요.', TITLE) : toastr.info('이미 설치되어 있어요.', TITLE);
         if (a === 'unregex') { removeRegex(); toastr.info('제거했어요.', TITLE); }
-        if (a === 'trlast') { const ch = ctx().chat ?? []; let i = ch.length - 1; while (i >= 0 && (ch[i].is_user || ch[i].is_system)) i--; if (i >= 0) { e.target.closest('button').disabled = true; await translateMessage(i); e.target.closest('button').disabled = false; } }
-        if (a === 'trall') translateAll(e.target.closest('button'));
-        if (a === 'trclear') clearAll();
+        if (a === 'trsheet') translateSheet(e.target.closest('button'));
     });
     document.getElementById('extensions_settings2')?.appendChild(el);
 }
@@ -244,7 +236,6 @@ function registerCommands() {
         unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '추가 지시', typeList: ARGUMENT_TYPE.STRING, isRequired: true })],
         helpString: '한 칸에 추가 지시. 예: /ss-instruct tab=상점 암시장 추가',
     });
-    add({ name: 'ss-tr', callback: async () => { const ch = ctx().chat ?? []; let i = ch.length - 1; while (i >= 0 && (ch[i].is_user || ch[i].is_system)) i--; if (i >= 0) await translateMessage(i); return ''; }, helpString: '마지막 AI 답을 번역 모델로 번역한다.' });
     add({ name: 'ss-get', callback: () => (app.current ? sub(`${buildInjection(app.current).main}\n${buildInjection(app.current).people}`) : ''), helpString: '지금 상태(주입문)를 텍스트로 돌려준다.' });
 }
 
@@ -274,7 +265,6 @@ function onGenEnded() { refresh(); }
 const analyzed = new Set();
 let pingCounter = 0;
 function onCharRendered(id, type) {
-    try { trRendered(id, type); } catch (e) { console.warn(LOG, e); }
     refreshNow();
     notifyLatest();
     if (!isActive() || !ready() || type === 'quiet' || getMeta()?.paused) return;

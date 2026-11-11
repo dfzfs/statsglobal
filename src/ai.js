@@ -3,6 +3,7 @@ import { app, ctx, settings, getMeta, MOD, NORM, normalize, short, findBy, norm,
 import { P, aiGenerate, parseJSON } from './prompts.js';
 import { SCHEMA } from './core.js';
 import { compute, buildInjection, tagKeysFor, extractOps, stripStatus, recentChat, chatCharacters } from './engine.js';
+import { finJSON, finText, finLines } from './translate.js';
 
 const diffLine = () => `Difficulty: ${DIFFS[diffOf()].name} — ${P(`diff.${diffOf()}`)}`;
 const contactModeLine = (mode) => (mode && mode !== 'auto' ? `Use mode "${mode}" (${CONTACT_MODES[mode]?.name}).` : 'Choose mode: phone for modern/sci-fi worlds with phones, instant for magic/radio/telepathy, letter for worlds without phones (letters take days).');
@@ -16,7 +17,7 @@ export async function genModule(mod, { sources, core, instruction, profileMode, 
     L.push(`=== TASK ===\nPanel: ${mod === 'core' ? 'world core' : MOD[mod].name} — ${P(`gen.${mod}`, { difficulty: diffLine(), contactMode: contactModeLine(contactMode) })}${mod === 'profile' ? `\nMODE: ${profileMode ?? 'minimal'}` : ''}`);
     if (current) L.push(`=== CURRENT PANEL DATA ===\n${JSON.stringify(current)}`);
     L.push(`=== OUTPUT JSON SHAPE ===\n${SCHEMA[mod]}`);
-    const obj = parseJSON(await aiGenerate(feature, P('gen.system'), L.join('\n\n')));
+    const obj = await finJSON(parseJSON(await aiGenerate(feature, P('gen.system'), L.join('\n\n'))), core);
     if (mod === 'profile' && profileMode) obj.mode = profileMode;
     if (mod === 'contact' && contactMode && contactMode !== 'auto') obj.mode = contactMode;
     return mod === 'core' ? NORM.core(obj) : normalize(mod, obj);
@@ -32,7 +33,7 @@ export async function instructModule(mod, instruction, state) {
         `=== RULES ===\n${P('gen.instruct')}`,
         `=== OUTPUT JSON SHAPE ===\n${SCHEMA[mod]}`,
     ];
-    const obj = parseJSON(await aiGenerate('instruct', P('gen.system'), L.join('\n\n')));
+    const obj = await finJSON(parseJSON(await aiGenerate('instruct', P('gen.system'), L.join('\n\n'))));
     return mod === 'core' ? NORM.core(obj) : normalize(mod, obj);
 }
 
@@ -81,14 +82,14 @@ export async function phoneReply(who, state) {
     const ct = state.data.contact;
     const sys = P('ai.phone', { who, app: ct.app });
     const out = await aiGenerate('phone', sys, [...aboutPerson(who, state), `Conversation so far:\n${threadText(ct, who)}`].join('\n\n'), 400);
-    return stripStatus(out).split(/\r?\n/).map(x => x.replace(nameRe(who), '').replace(/^["“](.*)["”]$/, '$1').trim()).filter(Boolean).slice(0, 4);
+    return finLines(stripStatus(out).split(/\r?\n/).map(x => x.replace(nameRe(who), '').replace(/^["“](.*)["”]$/, '$1').trim()).filter(Boolean).slice(0, 4));
 }
 // 편지 답장 → 본문 하나
 export async function letterReply(who, state, { courier, rush }) {
     const ct = state.data.contact;
     const sys = P('ai.letter', { who, app: ct.app, courier: courier || ct.app, rush: rush ? `${who} paid extra for an express courier so it arrives fast — it may show a little in the letter (eagerness).` : '' });
     const out = await aiGenerate('letter', sys, [...aboutPerson(who, state), `Letters so far (oldest first):\n${threadText(ct, who, 8)}`].join('\n\n'), 700);
-    return stripStatus(out).replace(/^```\w*\s*|```\s*$/g, '').trim();
+    return finText(stripStatus(out).replace(/^```\w*\s*|```\s*$/g, '').trim());
 }
 // 선톡
 export async function pingMessage(who, state, auto = false) {
@@ -97,7 +98,7 @@ export async function pingMessage(who, state, auto = false) {
     const sys = P('ai.ping', { who, app: ct.app, format: letter ? 'a short letter: greeting, a paragraph or two, sign-off' : '1-3 short chat bubbles, one per line' });
     const out = await aiGenerate(auto ? 'autoping' : 'ping', sys, [...aboutPerson(who, state), `Earlier messages:\n${threadText(ct, who, 8) || '(none)'}`].join('\n\n'), letter ? 600 : 300);
     const t = stripStatus(out).trim();
-    return letter ? [t] : t.split(/\r?\n/).map(x => x.replace(nameRe(who), '').replace(/^["“](.*)["”]$/, '$1').trim()).filter(Boolean).slice(0, 4);
+    return letter ? [await finText(t)] : finLines(t.split(/\r?\n/).map(x => x.replace(nameRe(who), '').replace(/^["“](.*)["”]$/, '$1').trim()).filter(Boolean).slice(0, 4));
 }
 
 // 뉴스 · 가십 · 게시판 · 퀘스트: 새 항목만 받아 온다
@@ -113,7 +114,7 @@ async function freshItems(mod, feature, state, extra = '') {
         `=== TASK ===\n${P(`gen.${mod}`, { difficulty: diffLine() })}\nReturn ONLY new entries.`,
         `=== OUTPUT JSON SHAPE ===\n${SCHEMA[mod]}`,
     ].filter(Boolean);
-    return parseJSON(await aiGenerate(feature, P('gen.system'), L.join('\n\n')));
+    return finJSON(parseJSON(await aiGenerate(feature, P('gen.system'), L.join('\n\n'))));
 }
 export async function newNews(state) {
     const o = normalize('news', await freshItems('news', 'news', state));
@@ -142,6 +143,6 @@ export async function boardReplies(state, post) {
         `=== POST by ${post.mine ? '{{user}}' : post.author} ===\n${post.title}\n${post.body}`,
         post.replies.length ? `=== EXISTING REPLIES ===\n${post.replies.map(r => `${r.mine ? '{{user}}' : r.author}: ${r.text}`).join('\n')}` : '',
     ].filter(Boolean);
-    const o = parseJSON(await aiGenerate('boardReply', P('ai.boardReply'), L.join('\n\n'), 700));
+    const o = await finJSON(parseJSON(await aiGenerate('boardReply', P('ai.boardReply'), L.join('\n\n'), 700)));
     return (Array.isArray(o.replies) ? o.replies : []).filter(r => r?.text).map(r => ({ id: uid(), author: String(r.author || '익명'), text: String(r.text), mine: false })).slice(0, 5);
 }

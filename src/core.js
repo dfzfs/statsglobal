@@ -44,11 +44,9 @@ export const DEFAULTS = Object.freeze({
     fontScale: 1,
     radius: 12,
     defaultMods: null,
-    genLang: 'ko',           // 본편 생성 언어: ko | en
-    trMode: 'off',           // 후번역: off | auto(새 답 자동) | manual(버튼만)
-    trProfile: '',           // 번역에 쓸 연결 프로필 ('' = 확장 AI 모델 → 없으면 메인)
+    ssGenLang: 'ko',         // 상태창(확장 AI) 생성 언어: ko = 바로 한국어 | en = 영어로 생성 → 번역 모델로 번역
+    trProfile: '',           // 번역 모델 (연결 프로필, '' = 확장 AI 모델 → 없으면 메인)
     trLang: '한국어',
-    trUser: false,
     prompts: {},             // 사용자 수정 프롬프트
     usage: [],               // 확장 AI 사용 기록
 });
